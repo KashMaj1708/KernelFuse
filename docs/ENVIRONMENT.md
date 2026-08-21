@@ -55,6 +55,54 @@ nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu --format=csv
 
 (`bench_rmsnorm.py` already logs this per shape.) Try `nvidia-smi -lgc` when elevated — on this machine it failed with “current user does not have permission”; many mobile parts refuse locks even with admin. If clocks cannot be locked, treat before/after samples as mandatory and do not compare %peak across runs where SM/mem clocks drifted.
 
+## WSL2 (Phase 5+ serving)
+
+| Item | Value |
+|------|--------|
+| Distro | Ubuntu (WSL2), default |
+| Kernel | 6.6.87.2-microsoft-standard-WSL2 |
+| GPU in WSL | **Yes** — `nvidia-smi` sees GTX 1650, 4096 MiB, driver 526.47 |
+| Python in WSL | 3.12.3 (`/usr/bin/python3`) |
+| Docker in Ubuntu distro | not installed (`docker` missing); `docker-desktop` WSL distro exists but is separate |
+| CUDA toolkit in WSL | not confirmed under `/usr/local/cuda*` yet |
+
+**Why it matters:** vLLM / SGLang expect Linux. On this Windows laptop, serving backends should run **inside WSL2** (or Tier B/C), not native Win32. The Phase 5 harness itself is pure Python and runs on Windows against `mock` / `hf_local`; only Linux-native engines need WSL.
+
+**Quick check:**
+
+```powershell
+wsl -d Ubuntu -- nvidia-smi --query-gpu=name,memory.total --format=csv
+```
+
+**Still to do for vLLM in WSL (Phase 6 prep, not Phase 5 blocker):** install CUDA toolkit or use pip wheels that bundle CUDA runtime; optionally NVIDIA Container Toolkit if using Docker Desktop with GPU.
+
+## Docker Desktop
+
+| Item | Value |
+|------|--------|
+| Registered install | `C:\Program Files\Docker\Docker` (Docker Desktop **4.78.0**) — **folder missing / not present** |
+| Service | `com.docker.service` — **Stopped** (Manual) |
+| Old Desktop data on E: | `E:\Docker\wsl\...` (Desktop WSL disk; not needed) |
+| `docker` on PATH / Ubuntu | not installed yet |
+
+**Preferred path (Phase 6): Docker Engine inside WSL2 Ubuntu, space on E:**
+
+Do **not** depend on Docker Desktop. Do **not** put `data-root` directly on `/mnt/e` (9p/DrvFs) — containerd fails with `mkdir .../dev/shm: no such file or directory`.
+
+Use an **ext4 loop image on E:** mounted at `/var/lib/docker` (space on E:, Linux FS semantics):
+
+```powershell
+# Fresh install (Engine + toolkit + ext4 data-root):
+wsl -d Ubuntu -- bash /mnt/c/Users/kashy/Desktop/KernelFuse/scripts/install_docker_wsl_e.sh
+
+# If Engine is already installed and GPU smoke failed on /mnt/e:
+wsl -d Ubuntu -- bash /mnt/c/Users/kashy/Desktop/KernelFuse/scripts/fix_docker_dataroot_ext4.sh
+```
+
+Defaults: image `E:\Docker\docker-data.img` (80G sparse), mount `/var/lib/docker`, fstab entry for persistence. After that, `docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi` should work. Optional cleanup of the broken 9p tree: `sudo rm -rf /mnt/e/Docker/engine`.
+
+Phase 5 does **not** need Docker (`mock` / `hf_local`).
+
 ## Build helpers
 
 ```powershell

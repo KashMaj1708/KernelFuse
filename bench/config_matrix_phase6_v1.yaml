@@ -1,0 +1,50 @@
+# Pre-registered config matrix — Phase 6 v1
+# Do NOT edit phase5-v1 in place. This is a new registration for real engines.
+matrix_version: phase6-v1
+description: >
+  Tier-B dry run / later Tier-C: real serving backends. Wider seq and concurrency
+  so continuous batching and prefill-vs-decode (TTFT/TPOT) are visible.
+  Written before first Phase 6 measurement.
+
+hardware_tier: B
+device_hint: "free-cloud or WSL2 GPU; 4GB 1650 only for smoke subset"
+
+backends:
+  - vllm
+  - sglang
+  # trtllm when NVIDIA Container Toolkit + engine image are ready
+  # - trtllm
+
+models:
+  # Placeholder IDs — pin concrete HF ids when Phase 6 starts (1–3B class).
+  vllm: REPLACE_WITH_SMALL_MODEL
+  sglang: REPLACE_WITH_SMALL_MODEL
+  trtllm: REPLACE_WITH_SMALL_MODEL
+
+sweep:
+  batch_size: [1, 4, 8]
+  input_tokens: [128, 512, 1024]
+  output_tokens: [128, 256, 512]
+  concurrency: [1, 2, 4, 8, 16]
+
+run:
+  warmup_requests: 8
+  num_requests: 64
+  seed: 0
+  report_percentiles: [50, 90, 99]
+  # Required metrics (schema): e2e latency, TTFT, TPOT,
+  # system_throughput_tok_s, mean_per_request_tok_s
+
+# Smoke subset for 4 GB Tier A (optional local check only — not reportable).
+tier_a_smoke_subset:
+  input_tokens: [128]
+  output_tokens: [128]
+  concurrency: [1, 2]
+  batch_size: [1]
+
+exclude: []
+
+notes:
+  - phase5-v1 remains the harness-proof record (toy scale).
+  - concurrency here is a real scheduling axis once continuous batching is active.
+  - TTFT/TPOT connect to Layer 2: RMSNorm is on the decode hot path (Phase 4).

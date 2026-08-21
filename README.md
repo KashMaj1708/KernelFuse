@@ -17,8 +17,10 @@ Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md)
 - **fixes_1** — pre-Phase-3 baseline: four variants, extended harness (complete; local [`docs/fix_report_1.md`](docs/fix_report_1.md))
 - **Pre-Phase-3 blockers** — `.venv-cuda` (cu121), dynamic smem, PATH asserts, vec4 bulk+tail (complete)
 - **Phase 3** — relative CUDA-event timing; fused beats naive (complete; local [`docs/phase_3_report.md`](docs/phase_3_report.md))
-- **Phase 4** — occupancy API + memory-bound writeup on Tier A; Nsight stalls pending Tier B (`ERR_NVGPUCTRPERM` locally)
-- Phases 5–8 — gated; not started
+- **Phase 4** — occupancy + T4 Nsight; twins isolate vectorization (MLP, not issue-bound); napkin 2× vs 2.7× closed by static smem
+- **Phase 5** — serving harness + full `phase5-v1` matrix on mock and hf_local (complete; local [`docs/phase_5_report.md`](docs/phase_5_report.md))
+- Open follow-ups: [`docs/pending.md`](docs/pending.md)
+- Phases 6–8 — gated; not started
 
 ## Quick checks (Phase 0)
 
@@ -69,3 +71,21 @@ Occupancy probe (no Nsight counters) explains the smem 4096→8192 regression: s
 - Linux: `scripts/run_phase4_profile.sh`
 
 See local [`docs/phase_4_report.md`](docs/phase_4_report.md).
+
+## Phase 5 — serving harness (Tier A)
+
+Pre-registered matrix: [`bench/config_matrix_phase5_v1.yaml`](bench/config_matrix_phase5_v1.yaml) (immutable harness proof). Phase 6 matrix: [`bench/config_matrix_phase6_v1.yaml`](bench/config_matrix_phase6_v1.yaml). Plan: [`docs/phase_5_plan.md`](docs/phase_5_plan.md). Open items: [`docs/pending.md`](docs/pending.md).
+
+```powershell
+# harness math + mock backend (no GPU)
+.\.venv\Scripts\python.exe .\tests\test_bench_metrics.py
+.\.venv\Scripts\python.exe .\bench\runner.py --backends mock --limit-cells 4
+
+# full mock matrix
+.\.venv\Scripts\python.exe .\bench\runner.py --backends mock
+
+# toy HF model on GPU (needs transformers in .venv-cuda)
+.\.venv-cuda\Scripts\python.exe .\bench\runner.py --backends hf_local --limit-cells 2
+```
+
+WSL2 GPU passthrough is verified (`nvidia-smi` inside Ubuntu sees the 1650) — required later for vLLM; not needed for `mock` / `hf_local`.

@@ -5,3 +5,4 @@
 #
 torch==2.13.0+cpu
 numpy==2.2.6
+PyYAML>=6.0
