@@ -7,9 +7,11 @@ Two-layer inference-performance project:
 
 Develop on a GTX 1650 (or free cloud) first; rent a 24 GB-class card only for final measurement. See [`KernelFuse_build_plan.md`](KernelFuse_build_plan.md) for the phased plan and [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) for machine/toolchain notes.
 
+Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md).
+
 ## Status
 
-- **Phase 0** — environment setup and sanity check (complete; see `docs/ENVIRONMENT.md`)
+- **Phase 0** — environment setup and sanity check (complete; see [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) and local [`docs/phase_0_report.md`](docs/phase_0_report.md))
 - Phases 1–8 — gated; not started
 
 ## Quick checks (Phase 0)
