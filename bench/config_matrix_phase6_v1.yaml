@@ -1,25 +1,30 @@
 # Pre-registered config matrix — Phase 6 v1
-# Do NOT edit phase5-v1 in place. This is a new registration for real engines.
+# Do NOT edit after first measurement. Bump matrix_version for any change.
+# phase5-v1 remains the harness-proof record (toy scale).
 matrix_version: phase6-v1
 description: >
-  Tier-B dry run / later Tier-C: real serving backends. Wider seq and concurrency
-  so continuous batching and prefill-vs-decode (TTFT/TPOT) are visible.
+  Tier-B dry run: real vLLM + TinyLlama on free cloud (prefer Colab T4).
+  Wider seq/concurrency so continuous batching and TTFT/TPOT are visible.
   Written before first Phase 6 measurement.
 
 hardware_tier: B
-device_hint: "free-cloud or WSL2 GPU; 4GB 1650 only for smoke subset"
+device_hint: "Colab/Kaggle T4 (sm_75); WSL 1650 smoke only — not reportable"
 
 backends:
   - vllm
-  - sglang
-  # trtllm when NVIDIA Container Toolkit + engine image are ready
-  # - trtllm
 
 models:
-  # Placeholder IDs — pin concrete HF ids when Phase 6 starts (1–3B class).
-  vllm: REPLACE_WITH_SMALL_MODEL
-  sglang: REPLACE_WITH_SMALL_MODEL
-  trtllm: REPLACE_WITH_SMALL_MODEL
+  vllm: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+# Launch contract (must match server flags + run_metadata.json)
+launch:
+  dtype: float16          # T4 has no bf16; TinyLlama config says bf16 — override explicitly
+  enforce_eager: true     # Phase 6 dry run only — Phase 7 enables CUDA graphs
+  gpu_memory_utilization: 0.75
+  max_model_len: 2048
+  attention_note: >
+    FlashAttention requires sm_80+. On T4 (sm_75) vLLM 0.27 used TRITON_ATTN.
+    Phase 6 and Phase 7 are NOT comparable across tiers for that reason.
 
 sweep:
   batch_size: [1, 4, 8]
@@ -27,15 +32,21 @@ sweep:
   output_tokens: [128, 256, 512]
   concurrency: [1, 2, 4, 8, 16]
 
+# Narrow Colab path — enough to show system vs per-request divergence.
+colab_smoke:
+  batch_size: [1]
+  input_tokens: [128, 512]
+  output_tokens: [128]
+  concurrency: [1, 2, 4]
+
 run:
   warmup_requests: 8
   num_requests: 64
   seed: 0
   report_percentiles: [50, 90, 99]
-  # Required metrics (schema): e2e latency, TTFT, TPOT,
-  # system_throughput_tok_s, mean_per_request_tok_s
+  # e2e latency, TTFT, TPOT, system_throughput_tok_s, mean_per_request_tok_s
 
-# Smoke subset for 4 GB Tier A (optional local check only — not reportable).
+# Optional local check on 4 GB — expect OOM; not the exit gate.
 tier_a_smoke_subset:
   input_tokens: [128]
   output_tokens: [128]
@@ -45,6 +56,6 @@ tier_a_smoke_subset:
 exclude: []
 
 notes:
-  - phase5-v1 remains the harness-proof record (toy scale).
-  - concurrency here is a real scheduling axis once continuous batching is active.
+  - Record vllm_version, attention_backend, dtype alongside every result set.
+  - concurrency is a real scheduling axis once continuous batching is active.
   - TTFT/TPOT connect to Layer 2: RMSNorm is on the decode hot path (Phase 4).

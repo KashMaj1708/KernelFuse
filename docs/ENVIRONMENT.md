@@ -74,7 +74,7 @@ nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu --format=csv
 wsl -d Ubuntu -- nvidia-smi --query-gpu=name,memory.total --format=csv
 ```
 
-**Still to do for vLLM in WSL (Phase 6 prep, not Phase 5 blocker):** install CUDA toolkit or use pip wheels that bundle CUDA runtime; optionally NVIDIA Container Toolkit if using Docker Desktop with GPU.
+**Phase 6 exit gate is Colab T4** (see [`docs/phase_6_plan.md`](phase_6_plan.md)). WSL Docker + GPU is ready for container engines later; pip vLLM on the 1650 is optional smoke only.
 
 ## Docker Desktop
 

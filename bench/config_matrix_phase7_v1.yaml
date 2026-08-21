@@ -1,0 +1,88 @@
+# Pre-registered config matrix — Phase 7 v1
+# IMMUTABLE after first measurement. Do not edit phase6-v1.
+# Written before the Vast.ai A100 session (pre-registration discipline).
+matrix_version: phase7-v1
+description: >
+  Tier-C multi-backend comparison on A100-class. Concurrency swept past the
+  throughput knee. CUDA graphs on. Decode grid + separate prefill-heavy cells.
+  Model pinned with HF revision before meter start.
+
+hardware_tier: C
+device_hint: "Vast.ai 1x A100 SXM4 40GB (~$0.53/hr); CUDA 12.x template preferred"
+
+backends:
+  - vllm
+  - sglang
+  - trtllm
+
+# Same weights for all three — provenance requires repo + revision.
+model_repo: Qwen/Qwen2.5-7B-Instruct
+model_revision: a09a35458c702b33eeacc393d103063234e8bc28
+model_notes: >
+  Ungated (gated=false). Uses RMSNorm (Layer 1 link). Apache-2.0.
+  ~7.6B params; fp16/bf16 weights ~15–16 GB.
+
+models:
+  vllm: Qwen/Qwen2.5-7B-Instruct
+  sglang: Qwen/Qwen2.5-7B-Instruct
+  trtllm: Qwen/Qwen2.5-7B-Instruct
+  mock: mock-toy
+
+launch:
+  dtype: bfloat16            # A100 supports bf16; same for all backends
+  enforce_eager: false       # CUDA graphs ON — do not carry Phase 6 eager over
+  gpu_memory_utilization: 0.90
+  max_model_len: 4096
+  attention_note: >
+    Expect FlashAttention (or engine default) on sm_80+. Not comparable to
+    Phase 6 T4/triton_attn/eager TPOT.
+
+# Harness batch_size stays 1 — concurrency is the continuous-batching axis.
+# (Harness "batch_size" is sequential per request slot, not engine batching.)
+sweep:
+  batch_size: [1]
+  input_tokens: [128, 512, 2048]
+  output_tokens: [128, 512]
+  concurrency: [1, 2, 4, 8, 16, 32, 64]
+  # If sys tok/s still rising at 64, extend to 128 for that (in,out) only.
+
+prefill_heavy:
+  batch_size: [1]
+  input_tokens: [2048]
+  output_tokens: [32]
+  concurrency: [1, 4, 16, 32]
+
+# Optional short path after install (one cell per backend).
+instance_smoke:
+  batch_size: [1]
+  input_tokens: [128]
+  output_tokens: [128]
+  concurrency: [1]
+
+run:
+  warmup_requests: 8
+  num_requests: 64
+  seed: 0
+  report_percentiles: [50, 90, 99]
+
+# Cell budget (per backend):
+#   main grid: 1 × 3 × 2 × 7 = 42
+#   prefill:   1 × 1 × 1 × 4 = 4
+#   total:     46 cells × 3 backends = 138
+# Runtime napkin (see docs/phase_7_predictions.md): ~1.5–3 h/backend decode-dominated,
+# plus install/engine build. Prefer cutting cells on paper over discovering at hour six.
+
+exclude: []
+
+pins:
+  # Override on instance after confirming CUDA 12 wheel availability.
+  vllm: "0.8.5"
+  sglang: "0.4.5.post1"
+  # TRT-LLM: NGC container tag — set at session start
+  trtllm_container: "nvcr.io/nvidia/tensorrt-llm/release:latest"
+
+notes:
+  - Order: vLLM → SGLang → TRT-LLM (bank results early; TRT last).
+  - Incremental CSV after every cell.
+  - Record attention_backend, dtype, enforce_eager, GPU SKU every run.
+  - Tokenizer-length prompts via bench/prompts.py (Phase 6 lesson).

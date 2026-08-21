@@ -19,8 +19,10 @@ Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md)
 - **Phase 3** — relative CUDA-event timing; fused beats naive (complete; local [`docs/phase_3_report.md`](docs/phase_3_report.md))
 - **Phase 4** — occupancy + T4 Nsight; twins isolate vectorization (MLP, not issue-bound); napkin 2× vs 2.7× closed by static smem
 - **Phase 5** — serving harness + full `phase5-v1` matrix on mock and hf_local (complete; local [`docs/phase_5_report.md`](docs/phase_5_report.md))
+- **Phase 6** — vLLM + TinyLlama dry run on Colab T4 (complete; local [`docs/phase_6_report.md`](docs/phase_6_report.md))
+- **Phase 7** — multi-backend Tier C (preflight ready; plan [`docs/phase_7_plan.md`](docs/phase_7_plan.md), predictions [`docs/phase_7_predictions.md`](docs/phase_7_predictions.md), matrix [`bench/config_matrix_phase7_v1.yaml`](bench/config_matrix_phase7_v1.yaml), driver `scripts/phase7/run_driver.sh`)
 - Open follow-ups: [`docs/pending.md`](docs/pending.md)
-- Phases 6–8 — gated; not started
+- Phase 8 — gated; not started
 
 ## Quick checks (Phase 0)
 
@@ -74,7 +76,7 @@ See local [`docs/phase_4_report.md`](docs/phase_4_report.md).
 
 ## Phase 5 — serving harness (Tier A)
 
-Pre-registered matrix: [`bench/config_matrix_phase5_v1.yaml`](bench/config_matrix_phase5_v1.yaml) (immutable harness proof). Phase 6 matrix: [`bench/config_matrix_phase6_v1.yaml`](bench/config_matrix_phase6_v1.yaml). Plan: [`docs/phase_5_plan.md`](docs/phase_5_plan.md). Open items: [`docs/pending.md`](docs/pending.md).
+Pre-registered matrix: [`bench/config_matrix_phase5_v1.yaml`](bench/config_matrix_phase5_v1.yaml) (immutable harness proof). Phase 6 matrix: [`bench/config_matrix_phase6_v1.yaml`](bench/config_matrix_phase6_v1.yaml). Plans: [`docs/phase_5_plan.md`](docs/phase_5_plan.md), [`docs/phase_6_plan.md`](docs/phase_6_plan.md). Open items: [`docs/pending.md`](docs/pending.md).
 
 ```powershell
 # harness math + mock backend (no GPU)
@@ -88,4 +90,13 @@ Pre-registered matrix: [`bench/config_matrix_phase5_v1.yaml`](bench/config_matri
 .\.venv-cuda\Scripts\python.exe .\bench\runner.py --backends hf_local --limit-cells 2
 ```
 
-WSL2 GPU passthrough is verified (`nvidia-smi` inside Ubuntu sees the 1650) — required later for vLLM; not needed for `mock` / `hf_local`.
+## Phase 6 — vLLM dry run (Tier B)
+
+```powershell
+# unit test (mocked HTTP stream — no GPU)
+.\.venv\Scripts\python.exe .\tests\test_vllm_http.py
+```
+
+On Colab T4: [`notebooks/phase6_colab.ipynb`](notebooks/phase6_colab.ipynb) — install cell → restart → serve (`float16`, `enforce_eager`, mem util 0.75) → `--smoke`. Set Colab secret `HF_TOKEN` if needed. Expect XFormers on sm_75; record `run_metadata.json`.
+
+WSL Docker Engine + GPU passthrough is ready for containers; the Phase 6 exit gate is still Colab T4, not the 1650.
