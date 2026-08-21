@@ -7,7 +7,7 @@ Two-layer inference-performance project:
 
 Develop on a GTX 1650 (or free cloud) first; rent a 24 GB-class card only for final measurement. See [`KernelFuse_build_plan.md`](KernelFuse_build_plan.md) for the phased plan and [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) for machine/toolchain notes.
 
-Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md), [`docs/phase_1_report.md`](docs/phase_1_report.md), [`docs/phase_2_report.md`](docs/phase_2_report.md), [`docs/fix_report_1.md`](docs/fix_report_1.md).
+Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md), [`docs/phase_1_report.md`](docs/phase_1_report.md), [`docs/phase_2_report.md`](docs/phase_2_report.md), [`docs/phase_3_report.md`](docs/phase_3_report.md), [`docs/phase_4_report.md`](docs/phase_4_report.md), [`docs/fix_report_1.md`](docs/fix_report_1.md).
 
 ## Status
 
@@ -16,7 +16,9 @@ Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md)
 - **Phase 2** — fused RMSNorm (single launch) matches same harness (complete)
 - **fixes_1** — pre-Phase-3 baseline: four variants, extended harness (complete; local [`docs/fix_report_1.md`](docs/fix_report_1.md))
 - **Pre-Phase-3 blockers** — `.venv-cuda` (cu121), dynamic smem, PATH asserts, vec4 bulk+tail (complete)
-- Phases 3–8 — gated; not started
+- **Phase 3** — relative CUDA-event timing; fused beats naive (complete; local [`docs/phase_3_report.md`](docs/phase_3_report.md))
+- **Phase 4** — occupancy API + memory-bound writeup on Tier A; Nsight stalls pending Tier B (`ERR_NVGPUCTRPERM` locally)
+- Phases 5–8 — gated; not started
 
 ## Quick checks (Phase 0)
 
@@ -46,3 +48,24 @@ Builds and checks **all four** backends against the CPU golden reference (extend
 | Fused + smem + float4 | `kernels/rmsnorm/rmsnorm_fused_vec4.cu` |
 | Harness | `tests/test_rmsnorm_correctness.py` |
 | Pre-Phase-3 checklist | `docs/fixes_1.md` |
+
+## Phase 3 — relative timing
+
+```powershell
+.\scripts\run_rmsnorm_bench.ps1
+```
+
+Uses `.venv-cuda`, CUDA events (median), and `torch.nn.functional.rms_norm` as the PyTorch baseline. See local [`docs/phase_3_report.md`](docs/phase_3_report.md).
+
+## Phase 4 — profiling / why
+
+```powershell
+.\scripts\run_phase4_profile.ps1
+```
+
+Occupancy probe (no Nsight counters) explains the smem 4096→8192 regression: static shared drops residency to **3 vs 1** blocks/SM (not napkin 4 vs 2). Full DRAM/stall metrics need unlocked counters or Tier B:
+
+- Notebook: [`notebooks/phase4_colab.ipynb`](notebooks/phase4_colab.ipynb) (prefer T4 / sm_75)
+- Linux: `scripts/run_phase4_profile.sh`
+
+See local [`docs/phase_4_report.md`](docs/phase_4_report.md).

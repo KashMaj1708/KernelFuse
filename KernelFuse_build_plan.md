@@ -61,12 +61,14 @@ An inference-serving benchmark (vLLM / SGLang / TensorRT-LLM) plus a hand-writte
 ## Phase 4 — Profiling and the "why" (the interview-critical phase)
 *Hardware: Tier A if counters allow, else Tier B. Goal: the memory-bound analysis that makes the kernel mean something.*
 
-- Profile the fused kernel with Nsight Compute. Capture: occupancy, memory throughput vs compute throughput, and whether global-memory access is coalesced.
-- Write the analysis: RMSNorm at inference sizes is memory-bandwidth-bound, not compute-bound, which is *why* fusion (fewer global-memory round-trips) helps and why simply adding arithmetic would not. Back this with your own captured numbers.
-- If the 1650's counters were restricted (flagged in Phase 0), run this pass on a free Colab/Kaggle GPU instead — still no paid time.
-- Commit the profiling report and the written explanation into the repo.
+- Profile fused / fused_smem / fused_vec4 with Nsight Compute. Capture: occupancy, memory throughput vs compute throughput, coalescing, warp stall reasons, and `__syncthreads` cost.
+- **Primary chase — smem width 4096 vs 8192:** Napkin math (dynamic smem only) predicts ~**2×** (4 vs 2 blocks/SM). **Occupancy API on the 1650 (includes static `spartial`/`sinv`) shows 3 vs 1 blocks (768 vs 256 threads) = 3.0×.** Phase 3 measured BW **122.3 → 45.8 GB/s (~2.67×)**. So most of the “beyond 2×” gap is static shared eating a resident block — especially at 8192. Do **not** stop Nsight at “occupancy dropped”; still capture DRAM throughput and stall reasons for the residual vs 3.0×, and for vec4 vs scalar smem at the **same** 1-block occupancy.
+- **Clocks on every run (mobile):** log `nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu` before and after each bench/profile. Nsight Compute replays kernels many times; if clocks sag, %peak shifts. Try `nvidia-smi -lgc` when admin is available — often refused on mobile.
+- Tier A: `.\scripts\run_phase4_profile.ps1` (occupancy probe always; ncu if counters unlocked). Tier B: `notebooks/phase4_colab.ipynb` / `scripts/run_phase4_profile.sh` (prefer T4 = sm_75).
+- Write the analysis: RMSNorm at inference sizes is memory-bandwidth-bound; fusion/staging cuts global round-trips. **Motivating frame:** torch 2.5.1 `F.rms_norm` composite = naive multi-pass tax in the wild; naive-vs-fused is the controlled version.
+- Commit the profiling report and the written explanation into the repo (local `docs/phase_4_report.md` is gitignored — promote a short `docs/` summary when ready to publish).
 
-**Exit gate:** you can state, with your own profiler numbers behind it, why the kernel is memory-bound and where fusion wins. This is the artifact the top roles actually read.
+**Exit gate:** you can state, with your own numbers, why the kernel is memory-bound, where fusion wins, and what closes napkin 2× vs measured ~2.7× (static smem → API 3×, plus any residual from Nsight stalls). Full stall/DRAM table may require Tier B if Tier A hits `ERR_NVGPUCTRPERM`.
 
 ---
 
@@ -99,9 +101,10 @@ An inference-serving benchmark (vLLM / SGLang / TensorRT-LLM) plus a hand-writte
 - Rent a 24 GB+ card. Stand up all three backends (vLLM, SGLang, TensorRT-LLM) serving your chosen model(s) — one 7 B-class model is enough; add a larger/MoE only if the card and budget allow.
 - Run the pre-registered sweep across all three backends. Collect throughput and latency percentiles across the config matrix.
 - Also run the final clean Nsight Compute pass on the fused kernel here if you want headline profiling numbers on datacenter-class hardware (optional if Phase 4 on Tier B was already clean).
+- **Torch RMSNorm honesty check:** on the rented card with *current* torch, profile `F.rms_norm` and count kernels per call. If it dispatches a fused CUDA kernel, that is the honest head-to-head and the number worth reporting. If it still decomposes, that is a finding in its own right (same multi-pass tax as Phase 3's 2.5.1 composite).
 - Tear the instance down the moment the runs finish. You are paying only for finished code to execute.
 
-**Exit gate:** complete, reportable benchmark tables across three backends, plus the kernel's final numbers. Rented time stays in the low single-digit hours because no debugging happens here.
+**Exit gate:** complete, reportable benchmark tables across three backends, plus the kernel's final numbers (and an explicit fused-vs-composite torch status on that stack). Rented time stays in the low single-digit hours because no debugging happens here.
 
 ---
 

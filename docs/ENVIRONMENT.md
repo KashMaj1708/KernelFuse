@@ -6,8 +6,8 @@ Captured so later benchmark/profile numbers stay reproducible. Update this file 
 
 | Item | Value |
 |------|--------|
-| GPU | NVIDIA GeForce GTX 1650 (Turing, `sm_75`) |
-| VRAM | 4096 MiB |
+| GPU | NVIDIA GeForce GTX 1650 **Mobile** (PCI `10DE:1F99`, Turing) |
+| VRAM | 4096 MiB **GDDR6** (nvidia-smi Max Memory Clock **6001 MHz** = half the data rate ⇒ 12 Gbps × 128-bit ≈ **192 GB/s** peak; GDDR5 tops out well below this clock and ≈128 GB/s) |
 | Driver | 526.47 |
 | Driver-reported CUDA | 12.0 |
 | OS | Windows 10/11 (build 26200) |
@@ -46,6 +46,14 @@ On this GTX 1650, **memory/occupancy counters are restricted for non-admin users
 1. NVIDIA Control Panel → Desktop (enable Developer settings if needed) → Developer → enable **“Allow access to GPU performance counters to all users”**, then reboot, **or**
 2. Run `ncu` elevated once for a smoke report, **and**
 3. Prefer Nsight **2022.4.x** with driver 526.47 (or update the driver if using a newer `ncu`).
+
+**Mobile clocks:** laptop GPUs throttle under sustained load; Nsight Compute replays kernels many times (longer thermal load than a short bench). Sample before/after every Phase 3/4 run:
+
+```text
+nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu --format=csv
+```
+
+(`bench_rmsnorm.py` already logs this per shape.) Try `nvidia-smi -lgc` when elevated — on this machine it failed with “current user does not have permission”; many mobile parts refuse locks even with admin. If clocks cannot be locked, treat before/after samples as mandatory and do not compare %peak across runs where SM/mem clocks drifted.
 
 ## Build helpers
 

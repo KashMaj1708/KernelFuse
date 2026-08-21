@@ -12,9 +12,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include <cuda_runtime.h>
+
+#include "timing_utils.h"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -196,16 +199,26 @@ static const char* run(const float* h_x, const float* h_w, float* h_out, int row
 }
 
 int main(int argc, char** argv) {
-    if (argc != 7) {
+    const bool is_bench = (argc >= 2 && std::strcmp(argv[1], "bench") == 0);
+    if (!is_bench && argc != 7) {
         fprintf(stderr,
-                "usage: %s <rows> <cols> <eps> <x.bin> <weight.bin> <out.bin>\n",
+                "usage:\n"
+                "  %s <rows> <cols> <eps> <x.bin> <weight.bin> <out.bin>\n"
+                "  %s bench <rows> <cols> <eps> <warmup> <iters> <x.bin> <w.bin>\n",
+                argv[0], argv[0]);
+        return 2;
+    }
+    if (is_bench && argc != 9) {
+        fprintf(stderr,
+                "usage: %s bench <rows> <cols> <eps> <warmup> <iters> <x.bin> <w.bin>\n",
                 argv[0]);
         return 2;
     }
 
-    int rows = std::atoi(argv[1]);
-    int cols = std::atoi(argv[2]);
-    float eps = static_cast<float>(std::atof(argv[3]));
+    const int a0 = is_bench ? 2 : 1;
+    int rows = std::atoi(argv[a0]);
+    int cols = std::atoi(argv[a0 + 1]);
+    float eps = static_cast<float>(std::atof(argv[a0 + 2]));
     if (rows <= 0 || cols <= 0) {
         fprintf(stderr, "rows and cols must be positive\n");
         return 2;
@@ -217,15 +230,50 @@ int main(int argc, char** argv) {
     std::fflush(stdout);
 
     size_t n = static_cast<size_t>(rows) * cols;
-    std::vector<float> h_x(n), h_w(cols), h_out(n);
+    std::vector<float> h_x(n), h_w(cols);
+
+    if (is_bench) {
+        int warmup = std::atoi(argv[5]);
+        int iters = std::atoi(argv[6]);
+        read_bin(argv[7], h_x.data(), n);
+        read_bin(argv[8], h_w.data(), cols);
+
+        float *d_x = nullptr, *d_w = nullptr, *d_out = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_x, n * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_w, cols * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&d_out, n * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_x, h_x.data(), n * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_w, h_w.data(), cols * sizeof(float), cudaMemcpyHostToDevice));
+
+        const bool use_smem = cols <= max_cols;
+        const char* path = use_smem ? "smem" : "global";
+        size_t shmem = static_cast<size_t>(cols) * sizeof(float);
+        auto launch = [&]() {
+            if (use_smem) {
+                rmsnorm_fused_smem<<<rows, kMaxThreads, shmem>>>(d_x, d_w, d_out, cols,
+                                                                 eps);
+            } else {
+                rmsnorm_fused_global<<<rows, kMaxThreads>>>(d_x, d_w, d_out, cols, eps);
+            }
+        };
+        float med = bench_cuda_events(warmup, iters, launch);
+        std::printf("PATH %s\n", path);
+        std::printf("MEDIAN_MS %.6f\n", med);
+        std::fflush(stdout);
+
+        CUDA_CHECK(cudaFree(d_x));
+        CUDA_CHECK(cudaFree(d_w));
+        CUDA_CHECK(cudaFree(d_out));
+        return 0;
+    }
+
+    std::vector<float> h_out(n);
     read_bin(argv[4], h_x.data(), n);
     read_bin(argv[5], h_w.data(), cols);
-
     const char* path = run(h_x.data(), h_w.data(), h_out.data(), rows, cols, eps,
                            max_cols);
     std::printf("PATH %s\n", path);
     std::fflush(stdout);
-
     write_bin(argv[6], h_out.data(), n);
     return 0;
 }
