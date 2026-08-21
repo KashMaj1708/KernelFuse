@@ -12,7 +12,8 @@ Local write-ups (gitignored): [`docs/phase_0_report.md`](docs/phase_0_report.md)
 ## Status
 
 - **Phase 0** — environment setup and sanity check (complete; see [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) and local [`docs/phase_0_report.md`](docs/phase_0_report.md))
-- Phases 1–8 — gated; not started
+- **Phase 1** — naive CUDA RMSNorm matches CPU golden reference on all harness shapes (complete)
+- Phases 2–8 — gated; not started
 
 ## Quick checks (Phase 0)
 
@@ -29,3 +30,13 @@ Build and run the trivial CUDA hello kernel:
 .\scripts\build_hello.ps1
 .\kernels\hello\hello.exe
 ```
+
+## Phase 1 — RMSNorm correctness
+
+```powershell
+.\scripts\run_rmsnorm_tests.ps1
+```
+
+CPU golden reference: `kernels/rmsnorm/rmsnorm_ref.py`  
+Naive CUDA (two unfused kernels): `kernels/rmsnorm/rmsnorm_naive.cu`  
+Harness: `tests/test_rmsnorm_naive.py`
