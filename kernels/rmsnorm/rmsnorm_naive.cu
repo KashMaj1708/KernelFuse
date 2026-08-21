@@ -32,12 +32,13 @@ __global__ void rmsnorm_inv_rms_naive(const float* __restrict__ x,
         return;
     }
     const float* row_ptr = x + static_cast<size_t>(row) * cols;
-    double sum_sq = 0.0;
+    // fixes_1 Step 4: fp32 accumulation (matches production kernels / timing story).
+    float sum_sq = 0.0f;
     for (int c = 0; c < cols; ++c) {
-        double v = static_cast<double>(row_ptr[c]);
-        sum_sq += v * v;
+        float v = row_ptr[c];
+        sum_sq = fmaf(v, v, sum_sq);
     }
-    float mean_sq = static_cast<float>(sum_sq / static_cast<double>(cols));
+    float mean_sq = sum_sq / static_cast<float>(cols);
     inv_rms[row] = rsqrtf(mean_sq + eps);
 }
 
@@ -136,6 +137,8 @@ int main(int argc, char** argv) {
     read_bin(argv[5], h_w.data(), cols);
 
     run_naive(h_x.data(), h_w.data(), h_out.data(), rows, cols, eps);
+    std::printf("PATH naive\n");
+    std::fflush(stdout);
     write_bin(argv[6], h_out.data(), n);
     return 0;
 }

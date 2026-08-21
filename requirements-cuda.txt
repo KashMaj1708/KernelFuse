@@ -1,0 +1,7 @@
+# CUDA PyTorch env for Phase 3 GPU baseline (leave .venv CPU-only for golden refs).
+#
+#   python -m venv .venv-cuda
+#   .\.venv-cuda\Scripts\pip.exe install -r requirements-cuda.txt --index-url https://download.pytorch.org/whl/cu121 --extra-index-url https://pypi.org/simple
+#
+torch==2.5.1+cu121
+numpy==2.2.6

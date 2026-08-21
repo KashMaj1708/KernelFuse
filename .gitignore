@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-cuda/
 venv/
 env/
 .env/
@@ -75,9 +76,10 @@ credentials.json
 secrets.*
 *.local.md
 
-# Local phase reports (keep on disk; do not commit)
+# Local phase / fix reports (keep on disk; do not commit)
 docs/phase_0_report.md
 docs/phase_*_report.md
+docs/fix_report_*.md
 reports/
 
 # Logs / temp / downloads

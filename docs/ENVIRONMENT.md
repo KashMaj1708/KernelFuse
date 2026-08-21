@@ -22,9 +22,10 @@ Captured so later benchmark/profile numbers stay reproducible. Update this file 
 | `nvcc` | 12.0, V12.0.140 | Needs `-allow-unsupported-compiler` with MSVC 19.40 |
 | Nsight Compute | 2025.4.1 (winget) | **Incompatible with driver 526.47** |
 | Nsight Compute | 2022.4.1.6 (CUDA 12.0 redist, extracted under `tools/`) | Driver-compatible; counters still blocked without admin / NVGPUCTRPERM fix |
-| Python | 3.10.11 (`E:\Python\Python310`) | Project venv: `.venv` |
-| PyTorch | 2.13.0+cpu | CPU-only wheel; `torch.cuda.is_available() == False` by design for Phase 0 |
-| NumPy | 2.2.6 | Installed into `.venv` |
+| Python | 3.10.11 (`E:\Python\Python310`) | Two venvs (see below) |
+| PyTorch (CPU golden) | 2.13.0+cpu in `.venv` | Correctness reference only; `cuda_available=False` |
+| PyTorch (GPU baseline) | 2.5.1+cu121 in `.venv-cuda` | Phase 3 timing vs built-in; verified on GTX 1650 |
+| NumPy | 2.2.6 | Both venvs |
 
 ## Sanity checks run
 
@@ -49,11 +50,33 @@ On this GTX 1650, **memory/occupancy counters are restricted for non-admin users
 ## Build helpers
 
 ```powershell
-.\scripts\build_hello.ps1      # compile + run hello kernel
-.\scripts\profile_hello.ps1    # ncu pass (expects ncu on PATH / known install)
-.\.venv\Scripts\Activate.ps1
-python -c "import torch; print(torch.__version__)"
+.\scripts\build_hello.ps1
+.\scripts\run_rmsnorm_tests.ps1   # uses .venv (CPU) for golden + CUDA binaries
+.\.venv\Scripts\Activate.ps1      # correctness / golden
+.\.venv-cuda\Scripts\Activate.ps1 # Phase 3 GPU PyTorch baseline
 ```
+
+## Python environments
+
+| Env | Purpose | Torch |
+|-----|---------|-------|
+| `.venv` | Golden RMSNorm reference + correctness harness | `2.13.0+cpu` |
+| `.venv-cuda` | Phase 3 GPU baseline (`torch.nn` / built-in ops on device) | `2.5.1+cu121` (`cuda_available=True` on this 1650) |
+
+Do not replace the CPU env — Phase 1–2 correctness stays on `.venv`.
+
+## RMSNorm kernels (pre-Phase-3)
+
+| Binary | Source | Notes |
+|--------|--------|-------|
+| `rmsnorm_naive` | `rmsnorm_naive.cu` | Two launches; fp32 `fmaf`; prints `PATH naive` |
+| `rmsnorm_fused` | `rmsnorm_fused.cu` | Global re-read fuse; `-DACC_DOUBLE` optional; `PATH fused` |
+| `rmsnorm_fused_smem` | `rmsnorm_fused_smem.cu` | Dynamic smem budget via `cudaDevAttrMaxSharedMemoryPerBlockOptin`; `PATH smem\|global` |
+| `rmsnorm_fused_vec4` | `rmsnorm_fused_vec4.cu` | Smem + float4 bulk + scalar tail; `PATH vec4\|vec4_tail\|global` |
+
+**Shared-memory budget:** queried at runtime (not hardcoded). On this GTX 1650, opt-in to the advertised max fails and the binaries fall back to the default **48 KiB** → `MAX_SMEM_COLS 11776`. On A100/3090 the same code should opt in to the larger limit so a 16384-wide row can stay on the smem path. Harness asserts `PATH` against `MAX_SMEM_COLS`.
+
+**Harness:** `tests/test_rmsnorm_correctness.py --backend all` — 29 shapes + 14 edge cases (incl. zeros/small at 4096/8192). Wide cols (`>=4096`) use rtol=5e-4 / atol=5e-5.
 
 ## Cost / hardware ladder reminder
 

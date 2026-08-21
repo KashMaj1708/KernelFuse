@@ -1,8 +1,11 @@
-// Phase 2: fused RMSNorm — correctness only, single kernel launch.
+// Phase 2 fused RMSNorm (fixes_1 Step 4: fp32 accumulator by default).
 // One block per row: block-reduce sum-of-squares → inv_rms in shared memory →
 // normalize × weight. inv_rms never written to global memory.
 //
-// CLI (same as naive):
+// Build with -DACC_DOUBLE to restore the Phase-2 double accumulator (numerical
+// reference only — do not time).
+//
+// CLI:
 //   rmsnorm_fused.exe <rows> <cols> <eps> <x.bin> <weight.bin> <out.bin>
 
 #include <cmath>
@@ -22,13 +25,18 @@
         }                                                                      \
     } while (0)
 
-// blockDim.x must be a power of two and <= kMaxThreads.
 static constexpr int kMaxThreads = 256;
+
+#ifdef ACC_DOUBLE
+using AccT = double;
+#else
+using AccT = float;
+#endif
 
 __global__ void rmsnorm_fused(const float* __restrict__ x,
                               const float* __restrict__ weight,
                               float* __restrict__ out, int cols, float eps) {
-    __shared__ double spartial[kMaxThreads];
+    __shared__ AccT spartial[kMaxThreads];
     __shared__ float sinv_rms;
 
     const int row = blockIdx.x;
@@ -36,10 +44,15 @@ __global__ void rmsnorm_fused(const float* __restrict__ x,
     const float* row_x = x + static_cast<size_t>(row) * cols;
     float* row_out = out + static_cast<size_t>(row) * cols;
 
-    double sum_sq = 0.0;
+    AccT sum_sq = AccT(0);
     for (int c = tid; c < cols; c += blockDim.x) {
+#ifdef ACC_DOUBLE
         double v = static_cast<double>(row_x[c]);
         sum_sq += v * v;
+#else
+        float v = row_x[c];
+        sum_sq = fmaf(v, v, sum_sq);
+#endif
     }
     spartial[tid] = sum_sq;
     __syncthreads();
@@ -52,7 +65,7 @@ __global__ void rmsnorm_fused(const float* __restrict__ x,
     }
 
     if (tid == 0) {
-        float mean_sq = static_cast<float>(spartial[0] / static_cast<double>(cols));
+        float mean_sq = static_cast<float>(spartial[0] / static_cast<AccT>(cols));
         sinv_rms = rsqrtf(mean_sq + eps);
     }
     __syncthreads();
@@ -135,6 +148,8 @@ int main(int argc, char** argv) {
     read_bin(argv[5], h_w.data(), cols);
 
     run_fused(h_x.data(), h_w.data(), h_out.data(), rows, cols, eps);
+    std::printf("PATH fused\n");
+    std::fflush(stdout);
     write_bin(argv[6], h_out.data(), n);
     return 0;
 }
