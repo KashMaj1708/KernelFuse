@@ -1,0 +1,7 @@
+# Phase 0 Python deps (CPU-only).
+#
+#   python -m venv .venv
+#   .\.venv\Scripts\pip.exe install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+#
+torch==2.13.0+cpu
+numpy==2.2.6

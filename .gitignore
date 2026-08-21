@@ -1,0 +1,36 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# CUDA / build
+*.exe
+*.obj
+*.o
+*.exp
+*.lib
+*.pdb
+*.ilk
+x64/
+Debug/
+Release/
+build/
+*.ncu-rep
+*.nsight-cuprof-report
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets / local
+.env
+*.local.md
+
+# Local toolchain drops (large; not committed)
+tools/nsight-compute-*/
