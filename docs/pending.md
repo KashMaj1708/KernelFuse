@@ -1,27 +1,25 @@
+## Methodology cleanup (post 8 / 8b / 9)
+
+| Item | Status |
+|------|--------|
+| Phase 7 cold-anchor overturn | **done** — `docs/phase_7_errata.md` |
+| Flush fail-closed (`ok=False`) | **done** — `bench/cache_obs.py` + runner |
+| CUDA-event microbench | **done** — `scripts/phase8/kernel_microbench.py` (re-run on GPU when convenient) |
+| Phase 8b regression rewrite | **done** — report |
+| Phase 9 correctness CSV | **done** — `scripts/phase9/decode_attn_correctness.py` |
+
 ## Phase 8 — vLLM integration
 
-**Closed.** Report: `docs/phase_8_report.md` (local). Git: kernelfuse op + scripts on main.
+**Closed** (serving null + integration). Kernel isolation claim retracted pending event/graph/ncu.
 
 ## Phase 8b — SGLang integration
 
-**Closed on A100.** Null confirmed (TPOT ~9.9→10.0 ms). Build extension **per-venv** (SGLang torch 2.13 ≠ vLLM torch 2.6).
-
-| Doc / script | Path |
-|--------------|------|
-| Plan | `docs/phase_8b_plan.md` |
-| Matrix | `bench/config_matrix_phase8b_v1.yaml` |
-| Treatment | `scripts/phase8b/session_sglang_treatment.sh` |
+**Closed** as **~1.4% consistent regression**, not null. CUDA version-check bypass caveat on all treatment numbers.
 
 ## Phase 9 — decode attention (ceiling)
 
-**Closed as optional stretch.** Naive CUDA microbench on A100; slower than torch_ref — no serving claim.
-
-| Doc / script | Path |
-|--------------|------|
-| Plan | `docs/phase_9_plan.md` |
-| Kernel | `kernels/attention/decode_attn_bench.cu` |
-| Bench | `scripts/phase9/session_decode_attn_bench.sh` |
+**Closed as stretch.** Correctness script added; timing interpretation corrected (torch_ref overhead floor).
 
 ## Phase 7
 
-**Closed.** Harness cache observability on main.
+**Closed** with errata: no definitive cold prefill measured.

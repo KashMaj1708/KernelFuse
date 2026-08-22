@@ -52,10 +52,29 @@ for rep in 1 2 3; do
     2>&1 | tee -a "${RESULTS_DIR}/harness_variance_rep${rep}.log"
 done
 
-log "3/3 cache pair in=2048 out=128 c=1 — cold (flush) then warm (no flush)"
+log "3/3 cache pair in=2048 — definitive cold via SERVER RESTART, then warm (no flush)"
+# HTTP flush alone no-ops on warm vLLM (Phase 8: ok=False, 25.6% hit). Restart is the cold gate.
+pkill -f 'vllm.entrypoints.openai.api_server' 2>/dev/null || true
+sleep 3
+unset KERNELFUSE_FUSED_ADD_RMSNORM
+LOG="${RESULTS_DIR}/vllm_preamble_cold_server.log"
+python -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL" --revision "$REVISION" \
+  --host 0.0.0.0 --port 8000 --dtype "$DTYPE" \
+  --gpu-memory-utilization "$GPU_MEM_UTIL" --max-model-len "$MAX_MODEL_LEN" \
+  >"$LOG" 2>&1 &
+echo $! >"${RESULTS_DIR}/vllm_server.pid"
+for i in $(seq 1 120); do
+  curl -sf http://127.0.0.1:8000/v1/models >/dev/null && break
+  sleep 5
+  (( i == 120 )) && { log "cold server timeout"; exit 1; }
+done
+
 python -m bench.runner \
   --matrix bench/config_matrix_phase8_v1.yaml \
   --backends vllm --cache-experiment \
+  --no-flush-cache-between-cells \
+  --assert-cold-hit --max-cold-hit-pct 15 \
   --out "${RESULTS_DIR}/results_phase8_cache_cold.csv" \
   --attention-backend FLASH_ATTN \
   --server-log "$LOG" \

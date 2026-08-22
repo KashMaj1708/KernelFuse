@@ -107,7 +107,14 @@ def scrape_prefix_cache_hit_pct(
 
 
 def flush_prefix_cache(base_url: str, backend: str, timeout_s: float = 10.0) -> bool:
-    """Ask the server to drop prefix/radix cache between cells (best-effort)."""
+    """Ask the server to drop prefix/radix cache between cells.
+
+    Returns True only if an admin endpoint accepted the request. On vLLM 0.8.5 a
+    successful HTTP response can still leave blocks resident when sequences or
+    scheduler state still reference them — so callers that need a *cold* prefill
+    must either restart the server or assert a near-zero hit rate on the next
+    measurement cell (see ``assert_flush_effective``).
+    """
     b = backend.lower()
     paths: Iterable[str]
     if b == "vllm":
@@ -129,3 +136,31 @@ def flush_prefix_cache(base_url: str, backend: str, timeout_s: float = 10.0) -> 
         except (URLError, TimeoutError, OSError, ValueError):
             continue
     return False
+
+
+def assert_flush_effective(
+    flushed: bool,
+    *,
+    soft: bool = False,
+    hit_pct: float | None = None,
+    max_hit_pct: float | None = None,
+) -> None:
+    """Fail closed when a required flush HTTP-no-ops.
+
+    Optionally (``max_hit_pct`` set) also fail when the cell's scraped hit rate
+    shows residual cache — for deliberate cold arms only. Do not enable that on
+    full sweeps: within-cell prompt reuse routinely yields non-zero hits.
+    """
+    if soft:
+        return
+    if not flushed:
+        raise RuntimeError(
+            "prefix-cache flush failed (HTTP no-op). Restart the server for a "
+            "definitive cold arm, or pass --soft-flush to allow best-effort."
+        )
+    if max_hit_pct is not None and hit_pct is not None and hit_pct > max_hit_pct:
+        raise RuntimeError(
+            f"post-cell prefix_cache_hit_pct={hit_pct:.1f}% exceeds cold threshold "
+            f"{max_hit_pct:.1f}% — flush did not empty the cache. Restart the "
+            "server between cold/warm arms."
+        )

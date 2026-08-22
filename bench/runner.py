@@ -28,7 +28,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bench.backends import make_backend
-from bench.cache_obs import flush_prefix_cache, scrape_prefix_cache_hit_pct
+from bench.cache_obs import (
+    assert_flush_effective,
+    flush_prefix_cache,
+    scrape_prefix_cache_hit_pct,
+)
 from bench.metrics import latency_range, summarize_latencies
 from bench.prompts import make_prompt, prompt_token_len
 from bench.schema import CellResult, CellSpec, GenerateRequest
@@ -401,6 +405,23 @@ def main() -> int:
         action="store_true",
         help="Disable prefix/radix cache flush before each cell (use for deliberate cache-on runs).",
     )
+    parser.add_argument(
+        "--soft-flush",
+        action="store_true",
+        help="Allow flush HTTP failure (legacy best-effort; not for cold claims).",
+    )
+    parser.add_argument(
+        "--assert-cold-hit",
+        action="store_true",
+        help="After a flushed cell, fail if prefix_cache_hit_pct exceeds --max-cold-hit-pct. "
+        "Use for deliberate cold arms only (not full sweeps — within-cell reuse is normal).",
+    )
+    parser.add_argument(
+        "--max-cold-hit-pct",
+        type=float,
+        default=5.0,
+        help="With --assert-cold-hit: max allowed scraped hit rate (default 5).",
+    )
     args = parser.parse_args()
 
     cfg = load_matrix(args.matrix)
@@ -500,9 +521,15 @@ def main() -> int:
                 write_status(f"CELL_START {bname} {label}")
                 print(f"  cell {label} ...", flush=True)
                 base_url = backend_base_url(bname)
+                flushed = False
                 if flush_cache_between_cells and base_url:
                     flushed = flush_prefix_cache(base_url, bname)
                     write_status(f"CACHE_FLUSH {bname} ok={flushed}")
+                    if not args.soft_flush and not flushed:
+                        raise RuntimeError(
+                            f"CACHE_FLUSH failed for {bname} (ok=False). "
+                            "Restart server for definitive cold, or pass --soft-flush."
+                        )
                 cell_result = run_cell(cell, backend, max_model_len=max_model_len)
                 metrics_url = args.metrics_url
                 if metrics_url is None and base_url:
@@ -515,6 +542,19 @@ def main() -> int:
                     server_log=server_log,
                     metrics_url=metrics_url if bname == "vllm" else None,
                 )
+                if flush_cache_between_cells:
+                    assert_flush_effective(
+                        flushed,
+                        soft=args.soft_flush,
+                        hit_pct=(
+                            cell_result.prefix_cache_hit_pct
+                            if args.assert_cold_hit
+                            else None
+                        ),
+                        max_hit_pct=(
+                            args.max_cold_hit_pct if args.assert_cold_hit else None
+                        ),
+                    )
                 results.append(cell_result)
                 append_csv_row(args.out, cell_result, percentiles)
                 e2e = (

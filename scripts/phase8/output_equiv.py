@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Greedy output equivalence: baseline vs kernelfuse treatment on same prompt."""
+"""Greedy *text* smoke: baseline vs kernelfuse treatment on same prompt.
+
+PASS means OpenAI completion strings match under temperature=0 — not
+bitwise-identical activations/logits. Argmax is robust to small logit noise.
+For tensor equivalence use unit tests / max-abs against the reference op.
+"""
 
 from __future__ import annotations
 
@@ -123,7 +128,9 @@ def main() -> int:
     }
     out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
-    print("OUTPUT_EQUIV", "PASS" if match else "FAIL")
+    print("OUTPUT_EQUIV_GREEDY_TEXT", "PASS" if match else "FAIL")
+    if match:
+        print("note: string match ≠ tensor numerical identity")
     return 0 if match else 1
 
 

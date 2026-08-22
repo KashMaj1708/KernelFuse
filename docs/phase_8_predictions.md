@@ -1,6 +1,9 @@
 # Phase 8 predictions (write before measuring)
 
-**Headline:** land a **fused add+RMSNorm custom op** into **vLLM 0.8.5** on Qwen2.5-7B, prove correctness + CUDA graph capture, measure kernel-level speedup in isolation. **SGLang is follow-up**, not co-primary.
+**Headline:** land a **fused add+RMSNorm custom op** into **vLLM 0.8.5** on Qwen2.5-7B, prove correctness + CUDA graph capture. **SGLang is follow-up.**
+
+**Microbench note (post-measurement):** wall-clock isolation at decode shapes is below resolution — claim kernel difference only after CUDA-event / graph / ncu methodology (`scripts/phase8/kernel_microbench.py`).
+
 
 Phase 7 hygiene items (cache on/off pair, output equivalence, one variance repeat) fold into the **single A100 preamble** on the integration measurement night — not a separate remount.
 
@@ -102,7 +105,7 @@ Run once after integration gates. Order matters.
 |------|---------|
 | Greedy output-equivalence | same prompt/seed, diff text across vLLM baseline vs op path (or cross-backend if time) |
 | One smoke × 3 backends repeated | between-run variance envelope on `in=128 out=128 c=1` |
-| Cache **off** then **on**, `in=2048 out=128 c=1` | publish cold/warm TTFT pair (~109 ms vs ~21 ms class); log `prefix_cache_hit_pct` |
+| Cache **off** then **on**, `in=2048 out=128 c=1` | cold requires **server restart** or flush+`--assert-cold-hit`; HTTP flush alone is insufficient (see phase_7_errata) |
 | Optional | NGC TRT peer with `max_model_len=4096` if time — still not Phase 8 headline |
 
 Harness: `flush_cache_between_cells` **on** by default for pre-registered matrices; deliberate cache-on cells opt out via `--no-flush-cache-between-cells` on that run only.
