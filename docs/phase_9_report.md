@@ -8,38 +8,33 @@
 
 - Standalone CUDA microbench: `kernels/attention/decode_attn_bench.cu`
 - Torch reference: `kernels/attention/decode_attn_ref.py`
-- Correctness CSV path: `scripts/phase9/decode_attn_correctness.py` (CUDA `load_inline` vs ref → max-abs / max-rel), plus a **mutation test**
+- Correctness: `scripts/phase9/decode_attn_correctness.py` — **fp32 kernel output vs fp32 ref**, with atol/rtol and a **near-tolerance mutation test**
 
-## A100 timing — CUDA events (re-run)
+## A100 timing — CUDA events
 
 | Backend | seq=512 min | seq=2048 min | scaling |
 |---------|------------:|-------------:|---------|
-| torch_ref (events) | 104.7 µs | 106.2 µs | **~1.01×** |
-| CUDA kernel (events, load_inline) | 177.1 µs | 562.8 µs | **~3.18×** |
+| torch_ref (events) | 104.7 µs | 106.2 µs | ~1.01× |
+| CUDA kernel (events) | 177.1 µs | 562.8 µs | ~3.18× |
 
-torch_ref stays flat under 4× KV — still an **overhead floor**. CUDA tracks work (~3×). Fair event compare: naive CUDA is **1.7×–5.3× slower** than torch_ref at these shapes.
+torch_ref stays flat under 4× KV — **overhead floor**. Measured CUDA/torch ratios are a **lower bound on torch’s advantage**, not torch’s true kernel time.
 
-**Ratio framing:** with torch_ref overhead-floored at ~105 µs, the measured ratio is a **lower bound on torch’s advantage**, not a measurement of torch’s true kernel time. The same in-loop amortization used in Phase 8 would be needed to resolve absolute torch work time.
+## Correctness (fp32 compare)
 
-Standalone exe earlier (176.8 → 690.4 µs) matches the same scaling story.
+bf16 has 8 mantissa bits (~0.4% relative quantum). Independent softmax reduction orders typically disagree by ~1e-4 relative in fp32 — **below the bf16 quantum** — so bit-exact bf16 zeros are the **expected** outcome of a bf16-output compare, not evidence of a strong test.
 
-## Correctness
-
-`scripts/phase9/decode_attn_correctness.py` on A100:
+Harness now writes **fp32** from the CUDA path, compares with `atol=rtol=5e-3`, and mutates by `1.5×atol` (not 0.1).
 
 | seq | max_abs | max_rel | pass |
 |----:|--------:|--------:|:----:|
-| 128 | 0 | 0 | ✓ |
-| 512 | 0 | 0 | ✓ |
-| 2048 | 0 | 0 | ✓ |
+| 128 | 9.6e-4 | 3.7e-3 | ✓ |
+| 512 | 4.5e-4 | 3.6e-3 | ✓ |
+| 2048 | 1.3e-4 | 3.6e-3 | ✓ |
 
-Exact zeros mean bf16 outputs matched the reference for these seeds. That is stronger agreement than independent softmax reductions usually give; treat it as “matched on these seeds,” not as proof of bitwise-identical algorithms in general.
-
-**Mutation test:** perturb one element of the CUDA output by ~0.1 and re-diff → max-abs ≈ 0.10, harness fails closed. So a correctness CSV that passes is evidence the comparison can fail — not a dead harness. Artifact: `reports/phase9/decode_attn_correctness.csv`.
+**Mutation test:** eps=0.0075 → max_abs≈7.5e-3, breaks `allclose` (harness can fail at the tolerance scale).
 
 ## Limits
 
-- No serving integration.
-- No FA/GQA-quality kernel.
-- torch_ref absolute time remains overhead-dominated; reported speedup of torch over CUDA is a lower bound.
-- Exact max-abs 0 is surprising; mutation test rules out a no-op comparator, not all shared-path bugs.
+- No serving integration; no FA/GQA-quality kernel.
+- torch_ref absolute time remains overhead-dominated.
+- bf16-output bitwise compare is insensitive by construction; use the fp32 path above.

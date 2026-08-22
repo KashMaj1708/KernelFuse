@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Phase 9 — max-abs / max-rel of CUDA decode attention vs decode_attn_ref."""
+"""Phase 9 — CUDA decode attention vs ref, compared in fp32 with a real tolerance.
+
+bf16 outputs matching bit-exactly is *expected*: 8 mantissa bits (~0.4% rel) swamp
+typical softmax-order disagreement (~1e-4 rel in fp32). Compare fp32 kernel output
+vs fp32 reference, and mutate near the tolerance (not 100x above it).
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from torch.utils.cpp_extension import load_inline
 
 from kernels.attention.decode_attn_ref import decode_attn_ref
 
+# Kernel writes fp32 so the harness can bound error below the bf16 quantum.
 _CUDA_SRC = r"""
 #include <torch/extension.h>
 #include <cuda_bf16.h>
@@ -19,11 +25,11 @@ _CUDA_SRC = r"""
 
 using bf16 = __nv_bfloat16;
 
-__global__ void decode_attn_kernel(
+__global__ void decode_attn_kernel_f32(
     const bf16* __restrict__ q,
     const bf16* __restrict__ k_cache,
     const bf16* __restrict__ v_cache,
-    bf16* __restrict__ out,
+    float* __restrict__ out,
     int seq_len,
     int head_dim,
     float scale) {
@@ -65,27 +71,34 @@ __global__ void decode_attn_kernel(
     float acc = 0.f;
     for (int s = 0; s < seq_len; ++s)
       acc += (scores[s] / sum) * __bfloat162float(v_cache[s * head_dim + d]);
-    out[d] = __float2bfloat16(acc);
+    out[d] = acc;
   }
 }
 
-torch::Tensor decode_attn_cuda(torch::Tensor q, torch::Tensor k, torch::Tensor v) {
+torch::Tensor decode_attn_cuda_f32(torch::Tensor q, torch::Tensor k, torch::Tensor v) {
   TORCH_CHECK(q.is_cuda() && q.scalar_type() == torch::kBFloat16);
   int seq = k.size(0);
   int dim = q.size(0);
-  auto out = torch::empty_like(q);
+  auto out = torch::empty({dim}, q.options().dtype(torch::kFloat32));
   float scale = 1.f / sqrtf((float)dim);
   int threads = 256;
   size_t smem = (size_t)(seq + threads) * sizeof(float);
-  decode_attn_kernel<<<1, threads, smem>>>(
+  decode_attn_kernel_f32<<<1, threads, smem>>>(
       reinterpret_cast<bf16*>(q.data_ptr<at::BFloat16>()),
       reinterpret_cast<bf16*>(k.data_ptr<at::BFloat16>()),
       reinterpret_cast<bf16*>(v.data_ptr<at::BFloat16>()),
-      reinterpret_cast<bf16*>(out.data_ptr<at::BFloat16>()),
+      out.data_ptr<float>(),
       seq, dim, scale);
   return out;
 }
 """
+
+# Absolute / relative tolerances on fp32 outputs. Softmax order differences of
+# ~1e-4 rel are expected; keep headroom but stay well below the bf16 quantum (~4e-3).
+ABS_TOL = 5e-3
+REL_TOL = 5e-3
+# Mutation near the abs tolerance (not 0.1 = 20x above).
+MUTATION_EPS = 1.5 * ABS_TOL
 
 
 def main() -> int:
@@ -100,10 +113,10 @@ def main() -> int:
         raise SystemExit("CUDA required")
 
     mod = load_inline(
-        name="decode_attn_corr",
-        cpp_sources="torch::Tensor decode_attn_cuda(torch::Tensor, torch::Tensor, torch::Tensor);",
+        name="decode_attn_corr_f32",
+        cpp_sources="torch::Tensor decode_attn_cuda_f32(torch::Tensor, torch::Tensor, torch::Tensor);",
         cuda_sources=_CUDA_SRC,
-        functions=["decode_attn_cuda"],
+        functions=["decode_attn_cuda_f32"],
         extra_cuda_cflags=["-O3"],
         verbose=False,
     )
@@ -114,22 +127,31 @@ def main() -> int:
         q = torch.randn(args.dim, device="cuda", dtype=torch.bfloat16)
         k = torch.randn(seq, args.dim, device="cuda", dtype=torch.bfloat16)
         v = torch.randn(seq, args.dim, device="cuda", dtype=torch.bfloat16)
-        ref = decode_attn_ref(q, k, v)
-        out = mod.decode_attn_cuda(q.contiguous(), k.contiguous(), v.contiguous())
+        # fp32 reference (same entrypoint, upcast inside)
+        ref = decode_attn_ref(q, k, v).float()
+        out = mod.decode_attn_cuda_f32(q.contiguous(), k.contiguous(), v.contiguous())
         torch.cuda.synchronize()
-        diff = (out.float() - ref.float()).abs()
+        diff = (out - ref).abs()
         max_abs = float(diff.max().item())
-        max_rel = float((diff / ref.float().abs().clamp_min(1e-6)).max().item())
+        max_rel = float((diff / ref.abs().clamp_min(1e-6)).max().item())
+        ok = bool(
+            torch.allclose(out, ref, rtol=REL_TOL, atol=ABS_TOL, equal_nan=False)
+        )
         rows.append(
             {
                 "seq": seq,
                 "dim": args.dim,
                 "max_abs": f"{max_abs:.6e}",
                 "max_rel": f"{max_rel:.6e}",
-                "pass": int(max_abs < 0.05),
+                "abs_tol": ABS_TOL,
+                "rel_tol": REL_TOL,
+                "pass": int(ok),
             }
         )
-        print(f"seq={seq} max_abs={max_abs:.4e} max_rel={max_rel:.4e} pass={max_abs < 0.05}")
+        print(
+            f"seq={seq} max_abs={max_abs:.4e} max_rel={max_rel:.4e} "
+            f"pass={ok} (atol={ABS_TOL} rtol={REL_TOL})"
+        )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as f:
@@ -138,19 +160,26 @@ def main() -> int:
         w.writerows(rows)
     print(f"wrote {args.out}")
 
-    # Mutation test: harness must fail if we perturb the kernel output.
+    # Mutation near tolerance: must fail closed.
     q = torch.randn(args.dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(512, args.dim, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(512, args.dim, device="cuda", dtype=torch.bfloat16)
-    ref = decode_attn_ref(q, k, v)
-    out = mod.decode_attn_cuda(q.contiguous(), k.contiguous(), v.contiguous())
+    ref = decode_attn_ref(q, k, v).float()
+    out = mod.decode_attn_cuda_f32(q.contiguous(), k.contiguous(), v.contiguous())
     out_mut = out.clone()
-    out_mut[0] = out_mut[0] + torch.tensor(0.1, device="cuda", dtype=torch.bfloat16)
-    mut_abs = float((out_mut.float() - ref.float()).abs().max().item())
-    if mut_abs < 0.05:
-        print(f"MUTATION_TEST FAIL: perturbed output still max_abs={mut_abs:.4e}")
+    out_mut[0] = out_mut[0] + MUTATION_EPS
+    mut_ok = torch.allclose(out_mut, ref, rtol=REL_TOL, atol=ABS_TOL)
+    mut_abs = float((out_mut - ref).abs().max().item())
+    if mut_ok:
+        print(
+            f"MUTATION_TEST FAIL: eps={MUTATION_EPS} still allclose "
+            f"(max_abs={mut_abs:.4e})"
+        )
         return 1
-    print(f"MUTATION_TEST PASS: perturbed max_abs={mut_abs:.4e} (harness can fail)")
+    print(
+        f"MUTATION_TEST PASS: eps={MUTATION_EPS} breaks allclose "
+        f"(max_abs={mut_abs:.4e})"
+    )
 
     if any(int(r["pass"]) == 0 for r in rows):
         return 1

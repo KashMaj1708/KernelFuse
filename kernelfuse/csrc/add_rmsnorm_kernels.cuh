@@ -32,9 +32,33 @@ __device__ inline void block_reduce_sum(float* smem, float val, int tid, int blo
     }
 }
 
-struct Bf16Vec8 {
-    __nv_bfloat16 val[8];
-};
+// 16-byte DRAM transactions. A struct-of-bf16 array load does *not* survive
+// codegen as LDG.E.128 — nvcc emits LDG.E.U16. Load/store through uint4.
+__device__ __forceinline__ uint4 ldg_u128(const void* ptr) {
+    return *reinterpret_cast<const uint4*>(ptr);
+}
+
+__device__ __forceinline__ void stg_u128(void* ptr, uint4 v) {
+    *reinterpret_cast<uint4*>(ptr) = v;
+}
+
+__device__ __forceinline__ void unpack_bf16x8(uint4 v, float out[8]) {
+    const __nv_bfloat16* b = reinterpret_cast<const __nv_bfloat16*>(&v);
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        out[i] = bf16_to_f32(b[i]);
+    }
+}
+
+__device__ __forceinline__ uint4 pack_bf16x8(const float in[8]) {
+    uint4 v;
+    __nv_bfloat16* b = reinterpret_cast<__nv_bfloat16*>(&v);
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        b[i] = f32_to_bf16(in[i]);
+    }
+    return v;
+}
 
 __global__ void fused_add_rms_norm_bf16_scalar(
     __nv_bfloat16* __restrict__ input,
@@ -88,10 +112,9 @@ __global__ void fused_add_rms_norm_bf16_vec8(
     const int tid = threadIdx.x;
     const int block_size = blockDim.x;
 
-    auto* input_v = reinterpret_cast<Bf16Vec8*>(input + static_cast<size_t>(row) * hidden_size);
-    auto* residual_v =
-        reinterpret_cast<Bf16Vec8*>(residual + static_cast<size_t>(row) * hidden_size);
-    auto* weight_v = reinterpret_cast<const Bf16Vec8*>(weight);
+    __nv_bfloat16* input_row = input + static_cast<size_t>(row) * hidden_size;
+    __nv_bfloat16* residual_row = residual + static_cast<size_t>(row) * hidden_size;
+    const __nv_bfloat16* weight_row = weight;
 
     float local[kVecPerThread][8];
     float variance = 0.0f;
@@ -100,17 +123,17 @@ __global__ void fused_add_rms_norm_bf16_vec8(
     for (int t = 0; t < kVecPerThread; ++t) {
         const int idx = tid + t * block_size;
         if (idx < vec_hidden) {
-            Bf16Vec8 in = input_v[idx];
-            Bf16Vec8 rs = residual_v[idx];
-            Bf16Vec8 temp;
+            float in_f[8], rs_f[8], sum_f[8];
+            unpack_bf16x8(ldg_u128(input_row + idx * 8), in_f);
+            unpack_bf16x8(ldg_u128(residual_row + idx * 8), rs_f);
 #pragma unroll
             for (int i = 0; i < 8; ++i) {
-                float z = bf16_to_f32(in.val[i]) + bf16_to_f32(rs.val[i]);
+                float z = in_f[i] + rs_f[i];
                 local[t][i] = z;
-                temp.val[i] = f32_to_bf16(z);
+                sum_f[i] = z;
                 variance = fmaf(z, z, variance);
             }
-            residual_v[idx] = temp;
+            stg_u128(residual_row + idx * 8, pack_bf16x8(sum_f));
         }
     }
 
@@ -125,14 +148,13 @@ __global__ void fused_add_rms_norm_bf16_vec8(
     for (int t = 0; t < kVecPerThread; ++t) {
         const int idx = tid + t * block_size;
         if (idx < vec_hidden) {
-            Bf16Vec8 out;
-            Bf16Vec8 w = weight_v[idx];
+            float w_f[8], out_f[8];
+            unpack_bf16x8(ldg_u128(weight_row + idx * 8), w_f);
 #pragma unroll
             for (int i = 0; i < 8; ++i) {
-                float x = local[t][i] * inv * bf16_to_f32(w.val[i]);
-                out.val[i] = f32_to_bf16(x);
+                out_f[i] = local[t][i] * inv * w_f[i];
             }
-            input_v[idx] = out;
+            stg_u128(input_row + idx * 8, pack_bf16x8(out_f));
         }
     }
 }
