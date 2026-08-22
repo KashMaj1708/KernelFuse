@@ -123,18 +123,12 @@ An inference-serving benchmark (vLLM / SGLang / TensorRT-LLM) plus a hand-writte
 ---
 
 ## Phase 8b — SGLang integration (follow-up)
-*After vLLM gate. Same kernel; higher integration friction.*
+*Closed on A100.* Same kernelfuse op; rebuild extension against SGLang torch ABI. Null confirmed.
 
 ---
 
 ## Optional Phase 9 — Attention kernel (ceiling, not floor)
-*Hardware: Tier A to develop, Tier B/C to profile. Goal: upgrade the kernel story, only after everything above is done.*
-
-- Attempt a fused attention kernel (decode-phase). Same discipline: CPU reference → correctness → fusion → profiling.
-- This is unbounded in difficulty; treat it strictly as an upgrade. RMSNorm already carries the kernel signal, so nothing above depends on this landing.
-- If it works even naively-but-correctly-and-profiled, it is a strong addition. If it stalls, drop it without cost.
-
-**Exit gate:** none required — this phase is pure upside.
+*Closed as stretch.* Naive decode-attn CUDA microbench on A100; slower than torch_ref — no serving claim.
 
 ---
 
