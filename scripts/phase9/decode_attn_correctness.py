@@ -133,24 +133,39 @@ def main() -> int:
         torch.cuda.synchronize()
         diff = (out - ref).abs()
         max_abs = float(diff.max().item())
-        max_rel = float((diff / ref.abs().clamp_min(1e-6)).max().item())
+        # Elementwise max_rel is dominated by near-zero ref elements; report
+        # max_abs / max|ref| (scale-normalized) and a floored relative max.
+        ref_abs = ref.abs()
+        max_ref = float(ref_abs.max().item())
+        max_abs_over_max_ref = max_abs / max(max_ref, 1e-12)
+        floor = 1e-3 * max(max_ref, 1e-12)
+        mask = ref_abs >= floor
+        if bool(mask.any()):
+            max_rel_floored = float((diff[mask] / ref_abs[mask]).max().item())
+        else:
+            max_rel_floored = float("nan")
         ok = bool(
             torch.allclose(out, ref, rtol=REL_TOL, atol=ABS_TOL, equal_nan=False)
         )
+        margin = REL_TOL / max(max_abs_over_max_ref, 1e-12)
         rows.append(
             {
                 "seq": seq,
                 "dim": args.dim,
                 "max_abs": f"{max_abs:.6e}",
-                "max_rel": f"{max_rel:.6e}",
+                "max_abs_over_max_ref": f"{max_abs_over_max_ref:.6e}",
+                "max_rel_floored": f"{max_rel_floored:.6e}",
                 "abs_tol": ABS_TOL,
                 "rel_tol": REL_TOL,
+                "tol_margin": f"{margin:.2f}",
                 "pass": int(ok),
             }
         )
         print(
-            f"seq={seq} max_abs={max_abs:.4e} max_rel={max_rel:.4e} "
-            f"pass={ok} (atol={ABS_TOL} rtol={REL_TOL})"
+            f"seq={seq} max_abs={max_abs:.4e} "
+            f"max_abs/max|ref|={max_abs_over_max_ref:.4e} "
+            f"max_rel_floored={max_rel_floored:.4e} "
+            f"pass={ok} margin={margin:.2f}x (atol={ABS_TOL} rtol={REL_TOL})"
         )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

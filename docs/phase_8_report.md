@@ -4,7 +4,13 @@
 
 **Met for serving integration + e2e null.** Custom fused **add+RMSNorm** op integrated into **vLLM 0.8.5** on Qwen2.5-7B @ A100 with CUDA graphs on. Batch-1 decode e2e TPOT unchanged within smoke variance.
 
-**Kernel isolation (after register + vectorization fixes):** at bandwidth-bound shapes, kernelfuse reaches **parity** with stock vLLM (~1.66 TB/s under a four-array model). Earlier ~0.5× rankings were measurement + codegen artifacts, not an irreducible algorithm gap.
+**Kernel isolation:** three regimes, not one number.
+
+| Regime | rows | Result |
+|--------|-----:|--------|
+| Latency | 1–64 | Both starved; within ~2–8% |
+| **Chunked-prefill / MLP-bound** | **128–1024** | **kernelfuse ahead; peak ~1.22× at 512–1024** |
+| DRAM roof | ≥4096 | Parity (~1.66 TB/s both) |
 
 ## Provenance
 
@@ -17,69 +23,66 @@
 | dtype | bfloat16 |
 | graphs | on |
 
-## Kernel microbench — framing
+## Fixes that matter
 
-### The 10³× napkin does not apply at these shapes
+### 1. Register demotion (runtime-indexed locals)
 
-~10 ns came from dividing ~14 KB by **device-wide** HBM. A `[1, 3584]` row is **one block on one SM**, with a dependent chain (load → reduce → normalize → store). Realistic floor: hundreds of ns to ~1 µs. Measured ~3.4 µs (vLLM, amortized) is **latency-bound / occupancy-starved**, not bandwidth-bound.
+Registers are not addressable. A local array indexed by a **runtime** variable cannot live in registers; nvcc silently demotes it to **local memory** (= DRAM). The first “register-resident” rewrite still did a second global read under another name (ptxas: **128-byte stack frame**).
 
-### Amortized measurement
+Requirement for residency: **compile-time indices** after unroll (`kVecPerThread`). After fix: **0 stack, 0 spills, ~32 regs**. Ratio moved ~0.39× → ~0.52× before vectorization.
 
-N launches inside one CUDA-graph capture, replay once, divide by N. Removes per-launch CPU overhead.
+### 2. Vector width that survives codegen
 
-### Rows sweep (graph, amortized) — after register + `uint4` load fix
+A `struct { bf16[8] }` load does **not** guarantee 16-byte DRAM transactions. Pre-fix SASS: **`LDG.E.U16`**. Fix: explicit `uint4` load/store → **`LDG.E.128` / `STG.E.128`**.
 
-| rows | kf min (µs) | vLLM min (µs) | kf/vLLM | regime |
-|-----:|------------:|--------------:|--------:|--------|
-| 1 | 3.70 | 3.42 | 0.93× | latency |
-| 8 | 3.79 | 3.54 | 0.93× | latency |
-| 64 | 4.10 | 4.02 | 0.98× | latency-ish |
-| 512 | 6.56 | 8.19 | **1.25×** | transition |
-| 4096 | 74.1 | 75.3 | **1.02×** | bandwidth |
-| 16384 | 282.7 | 284.0 | **1.00×** | bandwidth |
+Coalescing ≠ vectorization. Contiguous U16 loads across a warp still fill 128-byte sectors, so U16 can hit the DRAM roof. What `.128` buys is **per-thread MLP**: one instruction, 16 bytes in flight, instead of eight × 2-byte ops. That only shows when occupancy is too low to hide latency by itself.
 
-Artifact: `reports/phase8/kernel_rows_sweep_graph_v4.csv` (remote: `kernelfuse_results/phase8/`).
+## Three-regime story
 
-## Why kernelfuse lost — then caught up
+### Full sweep (graph, amortized)
 
-### 1. Spill / local-memory demotion (the war story)
+| rows | kf (µs) | vLLM (µs) | kf/vLLM |
+|-----:|--------:|----------:|--------:|
+| 1 | 3.70 | 3.42 | 0.93× |
+| 8 | 3.79 | 3.54 | 0.93× |
+| 64 | 4.10 | 4.02 | 0.98× |
+| **128** | **4.64** | **5.03** | **1.09×** |
+| **256** | **5.35** | **5.80** | **1.08×** |
+| **512** | **6.70** | **8.12** | **1.21×** |
+| **1024** | **11.79** | **14.40** | **1.22×** |
+| **2048** | **28.42** | **26.56** | **0.94×** |
+| 4096 | 74.1 | 75.3 | 1.02× |
+| 16384 | 282.7 | 284.0 | 1.00× |
 
-Registers are **not addressable**. A local array indexed by a **runtime** variable cannot live in registers; nvcc silently demotes it to **local memory**, which is backed by global DRAM. The first “register-resident” rewrite still did a second global read — just under another name. That is why ptxas reported a **128-byte stack frame**.
+Artifacts: `kernel_rows_sweep_graph_v4.csv`, `kernel_rows_sweep_mid.csv`.
 
-The fix is not `__restrict__` or loop shape: **compile-time indices** (`#pragma unroll` over `kVecPerThread`) so every access is a constant after unroll. After that: **0 stack, 0 spills, ~32 registers**. Ratio moved ~0.39× → ~0.52×.
+**512 is not a lone spike.** Advantage forms a smooth hump from 128→1024 (peak ~22%), then returns to parity / slight lag by 2048 as occupancy saturates the memory system. Mechanism matches the MLP story: ~5 waves over 108 SMs at rows≈512 — not enough blocks to hide latency by occupancy, enough work that the inner loop matters.
 
-### 2. Vectorization that never survived codegen (SASS, no ncu)
+**Serving map:** rows ≈ batch × chunk length. vLLM chunked prefill defaults sit in **512–2048**, so the win region is the shape a real prefill hands the norm kernel — not a synthetic microbench quirk.
 
-`cuobjdump -sass` on the kernelfuse `.so` (pre-fix) showed **`LDG.E.U16` / `STG.E.U16`** — the intended vec8 16-byte transactions never made it into SASS. Loading a `struct { bf16[8] }` does not guarantee `LDG.E.128`.
+### Roof arithmetic (rows=16384, hidden=3584, bf16)
 
-Fix: explicit `uint4` load/store helpers. Post-fix SASS:
+Four arrays (read in, read residual, write residual in-place, write out):
 
-| binary | dominant global ops |
-|--------|---------------------|
-| kernelfuse vec8 | **`LDG.E.128` / `STG.E.128`** |
-| vLLM `fused_add_rms_norm_kernel<BFloat16>` (one-symbol dump) | `LDG.E.U16` / `STG.E.U16` on this instantiation |
+`4 × 16384 × 3584 × 2 ≈ 470 MB` → both kernels **~1.66 TB/s**. Parity at the roof is expected once both vectorize and the device is saturated.
 
-**Do not** `cuobjdump -sass` the whole vLLM `_C.so` — it thrashs. Resolve the `.so` with logging disabled, `cuobjdump -symbols | grep fused_add_rms_norm`, then `cuobjdump -fun '<mangled>' -sass`.
+## vLLM U16 anomaly — resolved
 
-### 3. Four-array bandwidth arithmetic (no ncu)
+Earlier one-symbol dump hit `fused_add_rms_norm_kernel<BFloat16, **0**>` (`Li0` in the mangled name) — the **scalar fallback**. Runtime dispatch selects the vectorized specialization when hidden % 8 == 0 and pointers are 16-byte aligned (true for hidden=3584).
 
-At rows=16384, hidden=3584, bf16, a correct fused add+RMSNorm moves four arrays (read input, read residual, write residual, write output):
+| Instantiation | Mangled tag | Dominant DRAM ops |
+|---------------|-------------|-------------------|
+| scalar fallback | `…BFloat16ELi0E…` | `LDG.E.U16` / `STG.E.U16` |
+| **vectorized (what ran)** | `…BFloat16ELi8E…` | **`LDG.E.128` / `STG.E.128`** |
 
-`4 × 16384 × 3584 × 2 ≈ 470 MB`
+So both kernels vectorize at this shape. Roof parity is consistent. The mid-regime edge is **not** “we vectorize and they don’t”; it is residual inner-loop / MLP difference under partial occupancy.
 
-| kernel | time | effective BW (4-array) |
-|--------|-----:|-----------------------:|
-| kernelfuse | 282.7 µs | **1.66 TB/s** |
-| vLLM | 284.0 µs | **1.65 TB/s** |
+## Why e2e batch-1 did not move
 
-Both land near achievable A100 peak for this traffic. Residual is written **in place** (same buffer), not a fifth array.
-
-## Why e2e did not move
-
-~15 GB weights/token vs ~800 KB norm traffic / token. Batch-1 decode never leaves the latency dead zone for this op.
+~15 GB weights/token vs ~800 KB norm traffic/token. Batch-1 decode lives in the latency dead zone (rows≈1).
 
 ## Limits
 
 - No definitive cold prefill (flush no-op; Phase 7 errata).
-- ncu counters still blocked on this rental (`NVreg_RestrictProfilingToAdminUsers`); static SASS + byte arithmetic were enough here.
-- vLLM one-symbol SASS shows U16 on the dumped instantiation; runtime parity at 1.66 TB/s is the stronger claim.
+- ncu counters blocked on this rental; SASS + byte arithmetic sufficient here.
+- Mid-regime win is kernel isolation only; e2e chunked-prefill A/B not re-run in this phase.
