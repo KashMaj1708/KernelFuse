@@ -1,6 +1,6 @@
 # Python
 .venv/
-.venv-cuda/
+.venv-*/
 venv/
 env/
 .env/
@@ -21,6 +21,9 @@ htmlcov/
 .tox/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+build/
+*.so
+*.pyd
 
 # CUDA / MSVC / build artifacts
 *.exe
@@ -43,7 +46,6 @@ x64/
 Win32/
 Debug/
 Release/
-build/
 cmake-build-*/
 CMakeCache.txt
 CMakeFiles/
@@ -75,12 +77,43 @@ desktop.ini
 credentials.json
 secrets.*
 *.local.md
+id_ed25519*
+*_vastai*
+*_vast*
 
-# Local phase / fix reports (keep on disk; do not commit)
-docs/phase_0_report.md
-docs/phase_*_report.md
-docs/fix_report_*.md
+# Local write-ups / plans / predictions (keep on disk; do not publish)
+docs/phase_*
+docs/*_report*
+docs/*_plan*
+docs/*_predictions*
+docs/*errata*
+docs/*errata*
+docs/pending.md
+docs/fixes*
+docs/fix_report*
 reports/
+results/
+results_*/
+*_results/
+kernelfuse_results/
+run_metadata.json
+run_metadata*.json
+
+# Sync archives / uploads / scratch
+*.tgz
+*.tar
+*.tar.gz
+*.zip
+bench_sync*
+full_sync*
+phase*_sync*
+phase*_upload*
+phase*_ab*
+phase*_preamble*
+*_smoke.csv
+results_*.csv
+*.csv
+!bench/**/*.yaml
 
 # Logs / temp / downloads
 *.log
@@ -88,7 +121,15 @@ tmp/
 temp/
 *.tmp
 *.bak
+STATUS*.txt
+*.flag
 
 # Local toolchain drops (large; not committed)
 tools/
 tools/nsight-compute-*/
+
+# Agent / rental scratch
+scripts/phase7/*.sh
+!scripts/phase7/run_driver.sh
+AGENTS.md
+CLAUDE.md
