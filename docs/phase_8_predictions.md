@@ -36,7 +36,7 @@ This is the MIGrate null: **integration + mechanism**, not a headline tok/s clai
 | **Follow-up** | SGLang 0.5.x after vLLM gate passes |
 | **Model** | `Qwen/Qwen2.5-7B-Instruct` @ `a09a35458c702b33eeacc393d103063234e8bc28` |
 | **Hardware for A/B** | A100-SXM4-80GB (same class as Phase 7) |
-| **Dev hardware** | GTX 1650 + Colab T4 / TinyLlama for op build, correctness, graph smoke |
+| **Integration dev** | **Rented A100** (M2–M5 in one session). M1 correctness on 1650 ($0). T4/Colab optional, not required. |
 
 Do **not** parallelize vLLM + SGLang integration in Phase 8. Pick vLLM, finish the gate, then open SGLang.
 
@@ -76,17 +76,19 @@ Violations → silent eager fallback or broken capture; A/B would lie.
 
 ---
 
-## Development gates (mostly $0)
+## Development gates
 
 | Gate | Where | Pass criterion |
 |------|-------|----------------|
-| G0 | 1650 / CPU | `add_rmsnorm` matches golden + `F.rms_norm` composition on `[1,3584]` / batched decode rows |
-| G1 | 1650 or T4 | torch custom op loads; extension builds |
-| G2 | T4 + TinyLlama vLLM | op registered; server starts; smoke generate works |
-| G3 | T4 | CUDA graph capture smoke: one decode step captured with op in path |
-| G4 | A100 + 7B | Phase 8 measurement block (below) |
+| G0 | 1650 (local, $0) | `add_rmsnorm_fused.exe` vs vLLM native golden @ 3584 bf16 |
+| G1 | **Rented A100** | `pip install -e .` → `kernelfuse.fused_add_rms_norm` op smoke @ 3584 |
+| G2 | **Rented A100** | vLLM 0.8.5 call-site swap; server starts; one generate |
+| G3 | **Rented A100** | CUDA graph capture smoke with op in path |
+| G4 | **Same session** | Preamble + baseline vs treatment A/B |
 
-Do not rent A100 until **G0–G3** are green.
+**Do not rent** until G0 is green (already done). **One A100 evening** can cover G1–G4 if you batch integration debug + measurement.
+
+Tradeoff vs T4: you pay during extension iteration, but you get bf16, Phase 7 pins, and the final A/B box in one place — no porting surprises.
 
 ---
 

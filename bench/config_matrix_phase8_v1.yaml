@@ -60,6 +60,6 @@ pins:
   vllm: "0.8.5"
 
 notes:
-  - Rent A100 only after Colab/T4 integration + graph capture green.
-  - Pass 1: baseline vLLM. Pass 2: custom op. Same cells, same pins.
-  - Cache pair: run cache_experiment twice (flush on / flush off); see phase_8_predictions.md.
+  - "Rent A100 only after Colab/T4 integration + graph capture green."
+  - "Pass 1: baseline vLLM. Pass 2: custom op. Same cells, same pins."
+  - "Cache pair: run cache_experiment twice (flush on / flush off); see phase_8_predictions.md."

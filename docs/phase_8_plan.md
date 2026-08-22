@@ -76,13 +76,13 @@ Phase 7 confound → permanent harness fixes:
 | # | Milestone | Tier |
 |---|-----------|------|
 | M1 | add_rmsnorm correct vs golden @ 3584 bf16 | A (1650) |
-| M2 | torch op + extension builds | A |
-| M3 | vLLM serves TinyLlama/Qwen with op | B (T4) |
-| M4 | CUDA graph capture green | B |
-| M5 | A100 preamble + A/B recorded | C |
+| M2 | torch op + extension builds | **Rented A100** |
+| M3 | vLLM serves Qwen with op | **Rented A100** |
+| M4 | CUDA graph capture green | **Rented A100** |
+| M5 | Preamble + A/B recorded | **Same session** |
 | M6 | Phase 8 report + README integration section | — |
 
-**Rent A100 only for M5.**
+**Rent A100 once** for M2–M5 (extension build through A/B). M1 stays on 1650 ($0).
 
 ---
 

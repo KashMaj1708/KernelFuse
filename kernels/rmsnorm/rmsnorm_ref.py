@@ -38,3 +38,38 @@ def rmsnorm(x, weight, eps: float = 1e-6):
             weight = torch.as_tensor(weight, dtype=torch.float32)
         return rmsnorm_torch(x, weight, eps=eps)
     return rmsnorm_numpy(np.asarray(x), np.asarray(weight), eps=eps)
+
+
+def add_rmsnorm_torch(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """vLLM 0.8.5 RMSNorm.forward_native with residual (source of truth)."""
+    orig_dtype = x.dtype
+    x_f = x.to(dtype=torch.float32)
+    res_f = residual.to(dtype=torch.float32)
+    x_f = x_f + res_f
+    residual_out = x_f.to(orig_dtype)
+    variance = x_f.pow(2).mean(dim=-1, keepdim=True)
+    x_out = x_f * torch.rsqrt(variance + eps)
+    x_out = x_out.to(orig_dtype)
+    w = weight.to(dtype=orig_dtype)
+    if w.ndim == 1:
+        x_out = x_out * w
+    return x_out, residual_out
+
+
+def add_rmsnorm_numpy(
+    x: np.ndarray,
+    residual: np.ndarray,
+    weight: np.ndarray,
+    eps: float = 1e-6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """NumPy path via torch bf16/fp32 (matches vLLM native)."""
+    xt = torch.as_tensor(x)
+    rt = torch.as_tensor(residual)
+    wt = torch.as_tensor(weight)
+    x_out, res_out = add_rmsnorm_torch(xt, rt, wt, eps=eps)
+    return x_out.cpu().numpy(), res_out.cpu().numpy()

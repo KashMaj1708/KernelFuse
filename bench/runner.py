@@ -45,6 +45,7 @@ def expand_cells(
     *,
     smoke: bool = False,
     prefill_heavy: bool = False,
+    cache_experiment: bool = False,
 ) -> list[CellSpec]:
     wanted = backends or list(cfg["backends"])
     run = cfg["run"]
@@ -67,6 +68,13 @@ def expand_cells(
         override = cfg.get("prefill_heavy")
         if not override:
             raise KeyError("prefill_heavy requested but matrix has no prefill_heavy block")
+        for key in ("batch_size", "input_tokens", "output_tokens", "concurrency"):
+            if key in override:
+                sweep[key] = override[key]
+    if cache_experiment:
+        override = cfg.get("cache_experiment")
+        if not override:
+            raise KeyError("cache_experiment requested but matrix has no cache_experiment block")
         for key in ("batch_size", "input_tokens", "output_tokens", "concurrency"):
             if key in override:
                 sweep[key] = override[key]
@@ -359,6 +367,11 @@ def main() -> int:
         help="Use matrix prefill_heavy axes (long in, short out) instead of full sweep.",
     )
     parser.add_argument(
+        "--cache-experiment",
+        action="store_true",
+        help="Use matrix cache_experiment axes (long in, short out) for cold/warm TTFT pair.",
+    )
+    parser.add_argument(
         "--metadata-out",
         type=Path,
         default=None,
@@ -403,14 +416,19 @@ def main() -> int:
     flush_cache_between_cells = bool(flush_default) and not args.no_flush_cache_between_cells
     percentiles = [int(p) for p in cfg["run"]["report_percentiles"]]
     cells = expand_cells(
-        cfg, args.backends, smoke=args.smoke, prefill_heavy=args.prefill_heavy
+        cfg,
+        args.backends,
+        smoke=args.smoke,
+        prefill_heavy=args.prefill_heavy,
+        cache_experiment=args.cache_experiment,
     )
     if args.limit_cells > 0:
         cells = cells[: args.limit_cells]
 
     print(
         f"matrix={cfg['matrix_version']}  cells={len(cells)}  smoke={args.smoke}  "
-        f"prefill_heavy={args.prefill_heavy}  flush_cache={flush_cache_between_cells}  "
+        f"prefill_heavy={args.prefill_heavy}  cache_experiment={args.cache_experiment}  "
+        f"flush_cache={flush_cache_between_cells}  "
         f"backends={sorted({c.backend for c in cells})}  max_model_len={max_model_len}",
         flush=True,
     )
@@ -542,6 +560,7 @@ def main() -> int:
         extra={
             "smoke": args.smoke,
             "prefill_heavy": args.prefill_heavy,
+            "cache_experiment": args.cache_experiment,
             "out_csv": str(args.out),
             "max_model_len": max_model_len,
             "prompt_tokenization": "hf_tokenizer",
