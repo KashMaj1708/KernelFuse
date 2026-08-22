@@ -1,0 +1,2 @@
+rows,cols,graph,kernelfuse_min_us,kernelfuse_median_us,vllm_min_us,vllm_median_us,speedup_min,bytes_touch_approx,note
+32,3584,1,8.1510,8.1766,3.7734,3.7837,0.4629,917504,min over CUDA-event trials; wall-clock benches are not comparable

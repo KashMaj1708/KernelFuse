@@ -61,11 +61,20 @@
 | in=128 out=512 c=64 | 3716 | treatment CSV mixed with interrupted pass — interpret with spread |
 | in=128 out=512 c=128 | 3723 | same |
 
-## Kernel microbench (retracted interpretation)
+## Kernel microbench (CUDA events, A100 re-run)
 
-Recorded wall-clock numbers (~16–32 µs @ rows=1) are **~10³×** above the HBM napkin (~10 ns for ~14 KB). They measure **launch + sync**, not the kernel. Spread 0.75×–1.29× is harness noise, not kernel variance.
+Napkin: ~14 KB touch @ rows=1 → ~10 ns at 1.5 TB/s. Measured **min** over CUDA-event trials:
 
-**Correct claim:** kernel-level difference **unresolved** by the Phase 8 microbench. Methodology fix: CUDA events, min-of-trials, graph replay (`scripts/phase8/kernel_microbench.py`); cross-check `ncu --metrics gpu__time_duration.sum`.
+| rows | graph | kernelfuse min | vLLM min | kf/vllm |
+|-----:|:-----:|---------------:|---------:|--------:|
+| 1 | off | 8.24 µs | 5.63 µs | **0.68×** |
+| 32 | off | 9.51 µs | 5.83 µs | **0.61×** |
+| 1 | on | 7.67 µs | 3.42 µs | **0.45×** |
+| 32 | on | 8.15 µs | 3.77 µs | **0.46×** |
+
+Still **~10³×** above the memory napkin — absolute times remain launch/occupancy dominated, not a pure HBM bound. Relative ranking is stable: **stock vLLM fused op is faster**. Do **not** claim a kernelfuse isolation win.
+
+Artifacts: `reports/phase8/kernel_microbench_events_*.csv`
 
 ## Why e2e did not move
 

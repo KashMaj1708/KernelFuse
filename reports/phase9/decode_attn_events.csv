@@ -1,0 +1,3 @@
+seq,torch_ref_min_us,torch_ref_median_us,cuda_min_us,cuda_median_us,cuda_over_ref
+512,104.6938,105.4515,177.1110,177.2544,1.6917
+2048,106.1888,107.3357,562.8313,563.1795,5.3003

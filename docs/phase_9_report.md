@@ -10,31 +10,32 @@
 - Torch reference: `kernels/attention/decode_attn_ref.py`
 - Correctness CSV path: `scripts/phase9/decode_attn_correctness.py` (CUDA `load_inline` vs ref → max-abs / max-rel)
 
-## A100 timing (wall / event-naive exe)
+## A100 timing — CUDA events (re-run)
 
-| Backend | seq=512 | seq=2048 |
-|---------|--------:|---------:|
-| CUDA naive exe | 176.8 µs | 690.4 µs (~3.9×) |
-| torch_ref (wall) | 108.7 µs | 120.6 µs (~1.11×) |
+| Backend | seq=512 min | seq=2048 min | scaling |
+|---------|------------:|-------------:|---------|
+| torch_ref (events) | 104.7 µs | 106.2 µs | **~1.01×** |
+| CUDA kernel (events, load_inline) | 177.1 µs | 562.8 µs | **~3.18×** |
 
-### Interpretation (methodology)
+torch_ref stays flat under 4× KV — still an **overhead floor**. CUDA tracks work (~3×). Fair event compare: naive CUDA is **1.7×–5.3× slower** than torch_ref at these shapes; that relative claim is now supported. Absolute “torch is fast at decode attn” is not — its wall/event time barely moves with seq.
 
-torch_ref’s **11%** time growth under **4×** KV traffic is the signature of a **dispatch / overhead floor**, not measured matmul work. The CUDA kernel’s ~3.9× scaling is the only arm clearly tracking work.
-
-Therefore **“naive CUDA is slower than torch” is not established by this table** — it compares a work-dominated path to an overhead-dominated path. The conclusion may still be true after CUDA-event / graph / ncu measurement; this dataset does not show it.
+Standalone exe earlier (176.8 → 690.4 µs) matches the same scaling story.
 
 ## Correctness
 
-Run (local or rental CUDA):
+`scripts/phase9/decode_attn_correctness.py` on A100:
 
-```bash
-python scripts/phase9/decode_attn_correctness.py --out reports/phase9/decode_attn_correctness.csv
-```
+| seq | max_abs | max_rel | pass |
+|----:|--------:|--------:|:----:|
+| 128 | 0 | 0 | ✓ |
+| 512 | 0 | 0 | ✓ |
+| 2048 | 0 | 0 | ✓ |
 
-Pass criterion: max-abs < 0.05 bf16 vs `decode_attn_ref` for listed seq lengths. Artifact is the CSV (closes the “correctness-first without artifact” contradiction).
+Exact zeros here mean bf16 outputs matched the reference for these seeds (same math + deterministic reduction on this path). Artifact: `reports/phase9/decode_attn_correctness.csv`, `decode_attn_events.csv`.
 
 ## Limits
 
 - No serving integration.
 - No FA/GQA-quality kernel.
 - Standalone exe timings need the same CUDA-event discipline as Phase 8 microbench before any speed claim.
+- Event re-run confirms: CUDA slower than torch_ref **relatively**; torch_ref absolute time is still overhead-dominated.
