@@ -137,6 +137,21 @@ def main() -> int:
         w.writeheader()
         w.writerows(rows)
     print(f"wrote {args.out}")
+
+    # Mutation test: harness must fail if we perturb the kernel output.
+    q = torch.randn(args.dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(512, args.dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn(512, args.dim, device="cuda", dtype=torch.bfloat16)
+    ref = decode_attn_ref(q, k, v)
+    out = mod.decode_attn_cuda(q.contiguous(), k.contiguous(), v.contiguous())
+    out_mut = out.clone()
+    out_mut[0] = out_mut[0] + torch.tensor(0.1, device="cuda", dtype=torch.bfloat16)
+    mut_abs = float((out_mut.float() - ref.float()).abs().max().item())
+    if mut_abs < 0.05:
+        print(f"MUTATION_TEST FAIL: perturbed output still max_abs={mut_abs:.4e}")
+        return 1
+    print(f"MUTATION_TEST PASS: perturbed max_abs={mut_abs:.4e} (harness can fail)")
+
     if any(int(r["pass"]) == 0 for r in rows):
         return 1
     return 0

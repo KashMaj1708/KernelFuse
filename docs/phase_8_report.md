@@ -4,7 +4,7 @@
 
 **Met for serving integration + e2e null.** Custom fused **add+RMSNorm** op integrated into **vLLM 0.8.5** on Qwen2.5-7B @ A100 with CUDA graphs on. Batch-1 decode e2e TPOT unchanged within smoke variance.
 
-**Not met for kernel-isolation speedup.** Wall-clock microbenches at `[1,3584]` / `[32,3584]` timed launch overhead, not kernel work. Correct claim: **kernel-level difference is below the resolution of the recorded microbench** (see below). Do not read “modest speedup” from those rows.
+**Kernel isolation:** stock vLLM is faster. After amortized timing + a rows sweep + a register-resident rewrite, that ranking is stable and explainable (below). Do **not** claim a kernelfuse isolation win.
 
 ## Provenance
 
@@ -21,7 +21,7 @@
 
 ## Integration
 
-- **Kernel:** `kernelfuse` bf16 / fp32 reduce / vec8 @ 3584.
+- **Kernel:** `kernelfuse` bf16 / fp32 reduce / vec8 @ 3584 (register-resident post-add row; see below).
 - **Hook:** `KERNELFUSE_FUSED_ADD_RMSNORM=1` patch on `layernorm.py`.
 - **Graph capture:** finished ~23s baseline and treatment.
 
@@ -52,36 +52,54 @@
 
 ### Concurrency policy (not post-hoc exclusion)
 
-**Report all cells; label underpowered.** Short wall-time c=64/128 cells show larger run-to-run spread (including duplicate rows from an interrupted A/B). They are **not** used for the null claim and are **not** deleted from the CSV. Same policy as Phase 8b (which reports c=64 as secondary data).
+**Report all cells; label underpowered.** Short wall-time c=64/128 cells show larger run-to-run spread. They are **not** used for the null claim and are **not** deleted from the CSV.
 
-| Cell | Baseline sys | Treatment note |
-|------|-------------:|----------------|
-| in=128 out=128 c=64 | 3753 | underpowered / short wall |
-| in=128 out=128 c=128 | 3750 | underpowered / short wall |
-| in=128 out=512 c=64 | 3716 | treatment CSV mixed with interrupted pass — interpret with spread |
-| in=128 out=512 c=128 | 3723 | same |
+## Kernel microbench — framing
 
-## Kernel microbench (CUDA events, A100 re-run)
+### The 10³× napkin does not apply at these shapes
 
-Napkin: ~14 KB touch @ rows=1 → ~10 ns at 1.5 TB/s. Measured **min** over CUDA-event trials:
+~10 ns came from dividing ~14 KB by **device-wide** HBM bandwidth. A `[1, 3584]` row is **one block on one SM** out of 108, with a dependent chain (load → reduce → normalize → store). The realistic floor is a few DRAM round-trips plus the reduction: **hundreds of nanoseconds to ~1 µs**. Measured **3.4 µs** (vLLM, amortized graph) is roughly **3–7×** above that floor — **latency-bound / occupancy-starved**, not bandwidth-bound.
 
-| rows | graph | kernelfuse min | vLLM min | kf/vllm |
-|-----:|:-----:|---------------:|---------:|--------:|
-| 1 | off | 8.24 µs | 5.63 µs | **0.68×** |
-| 32 | off | 9.51 µs | 5.83 µs | **0.61×** |
-| 1 | on | 7.67 µs | 3.42 µs | **0.45×** |
-| 32 | on | 8.15 µs | 3.77 µs | **0.46×** |
+Signature: rows=1 → 3.43 µs, rows=64 → 4.02 µs (64× work, ~17% more time). Same failure mode as Phase 9’s overhead-floored `torch_ref`.
 
-Still **~10³×** above the memory napkin — absolute times remain launch/occupancy dominated, not a pure HBM bound. Relative ranking is stable: **stock vLLM fused op is faster**. Do **not** claim a kernelfuse isolation win.
+### Amortized measurement
 
-Artifacts: `reports/phase8/kernel_microbench_events_*.csv`
+N launches inside one CUDA-graph capture (or one event bracket), replay/sync once, divide by N. Removes per-launch CPU overhead; what remains at small rows is **kernel latency + residual graph-node cost**, not a pure HBM bound.
+
+### Rows sweep (graph, 200 launches amortized) — register-resident kernel
+
+| rows | kf min (µs) | vLLM min (µs) | kf/vLLM | regime note |
+|-----:|------------:|--------------:|--------:|-------------|
+| 1 | 6.15 | 3.43 | **0.56×** | latency / dead zone |
+| 8 | 6.27 | 3.55 | **0.57×** | latency |
+| 64 | 7.67 | 4.02 | **0.53×** | still latency-ish |
+| 512 | 25.5 | 6.74 | **0.27×** | transition |
+| 4096 | 142 | 75.2 | **0.53×** | bandwidth-bound |
+| 16384 | 547 | 284 | **0.52×** | bandwidth-bound |
+
+Artifacts: `reports/phase8/kernel_rows_sweep_graph_v3.csv`.
+
+**Serving map:** rows=1 ≈ batch-1 decode (null already confirmed). Large rows ≈ prefill / high-concurrency decode — the only regime where a norm kernel can matter. Ranking at the bandwidth end: **~2× slower than vLLM**, stable.
+
+## Why kernelfuse loses (~2×)
+
+Phase 2 already noted the fused RMSNorm still **read `x` twice from global** (reduce, then normalize). Production `fused_add_rms_norm` keeps the post-add row resident between passes.
+
+First rewrite attempt staged `float local[][]` with **runtime** indexing → ptxas reported a **128-byte stack frame** (local memory = DRAM). That accidentally recreated two-pass traffic. Fix: `#pragma unroll` over a compile-time `kVecPerThread` so indices are constant after unroll.
+
+**ptxas (sm_80) after fix:** vec8 kernel — **0 bytes stack, 0 spills, 32 registers**.
+
+Bandwidth-bound ratio moved from ~0.39× (stack-backed “cache”) to **~0.52×** (true registers). Most of a clean 2× story remains: still slower than vLLM at the knee. Likely residual causes (instruction mix / reduce / vectorization) — **ncu DRAM counters blocked** on this rental (`RmProfilingAdminOnly=1` / `ERR_NVGPUCTRPERM`), so the counter-level confirmation is pending a machine where profiling is allowed.
+
+Correctness vs vLLM at hidden=3584: residual exact; output max-abs ≤ 3.125e-2 (bf16).
 
 ## Why e2e did not move
 
-~15 GB weights/token vs ~800 KB norm traffic / token across 28 layers.
+~15 GB weights/token vs ~800 KB norm traffic / token across 28 layers. Batch-1 decode never leaves the latency dead zone for this op.
 
 ## Limits
 
 - No definitive cold prefill (flush no-op; see Phase 7 errata).
 - Greedy string match ≠ numerical tensor identity.
-- Wall-clock microbench does not support isolation speedup claims.
+- ncu metrics not collected on this instance (driver profiling permission).
+- Gap vs vLLM at BW-bound shapes closed only partially by register residency.
