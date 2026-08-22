@@ -15,6 +15,8 @@ log "PHASE8 build kernelfuse extension"
 if [[ -f .venv-vllm/bin/activate ]]; then
   # shellcheck disable=SC1091
   source .venv-vllm/bin/activate
+  # shellcheck disable=SC1091
+  source scripts/phase8/env_torch_lib.sh
   log "using existing .venv-vllm"
 else
   python3 -m venv .venv-vllm
@@ -26,8 +28,9 @@ else
 fi
 
 python -m pip -q install -U pip setuptools wheel ninja 2>/dev/null || true
-log "pip install -e . (kernelfuse extension)"
-python -m pip install -q -e . --no-build-isolation 2>&1 | tee -a "${RESULTS_DIR}/pip_kernelfuse.log"
+log "pip install kernelfuse (build extension in-place)"
+export PYTHONPATH="${REPO}:${PYTHONPATH:-}"
+python setup.py build_ext --inplace 2>&1 | tee -a "${RESULTS_DIR}/pip_kernelfuse.log"
 
 python - <<'PY' | tee -a "$KERNELFUSE_STATUS_PATH"
 import torch

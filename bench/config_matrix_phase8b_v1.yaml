@@ -1,0 +1,48 @@
+# Pre-registered config matrix — Phase 8b v1 (SGLang + kernelfuse op)
+matrix_version: phase8b-v1
+description: >
+  SGLang integration A/B. Same null as Phase 8: e2e TPOT unchanged at batch-1.
+
+hardware_tier: C
+device_hint: "Vast.ai 1x A100 SXM4 80GB"
+
+backends:
+  - sglang
+
+model_repo: Qwen/Qwen2.5-7B-Instruct
+model_revision: a09a35458c702b33eeacc393d103063234e8bc28
+
+models:
+  sglang: Qwen/Qwen2.5-7B-Instruct
+
+launch:
+  dtype: bfloat16
+  gpu_memory_utilization: 0.90
+  max_model_len: 4096
+
+sweep:
+  batch_size: [1]
+  input_tokens: [128]
+  output_tokens: [128, 512]
+  concurrency: [1, 64]
+
+instance_smoke:
+  batch_size: [1]
+  input_tokens: [128]
+  output_tokens: [128]
+  concurrency: [1]
+
+run:
+  warmup_requests: 8
+  num_requests: 64
+  seed: 0
+  report_percentiles: [50, 90, 99]
+  flush_cache_between_cells: true
+
+pins:
+  sglang: "0.5.18"
+  torch: "2.6.0"
+  torch_cuda_index: cu124
+
+notes:
+  - "Baseline: stock SGLang. Treatment: KERNELFUSE_FUSED_ADD_RMSNORM=1."
