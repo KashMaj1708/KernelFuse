@@ -1,14 +1,22 @@
-## Phase 7 pre-flight
+## Phase 8 — vLLM integration (active)
 
-**Part A (local) — ready to rent when pushed.**
+**Headline:** custom **add+RMSNorm** op in vLLM 0.8.5, not benchmark hygiene.
 
-- Matrix: [`bench/config_matrix_phase7_v1.yaml`](../bench/config_matrix_phase7_v1.yaml) — Qwen2.5-7B @ `a09a354…`, c→64, prefill cells, warmup 8 / n 64
-- Predictions: [`docs/phase_7_predictions.md`](phase_7_predictions.md)
-- Scripts: [`scripts/phase7/run_driver.sh`](../scripts/phase7/run_driver.sh) (`--dry-run` / `--smoke` / full)
-- Harness: tokenizer prompts + incremental CSV after each cell
-- Local mock dry-run: passed
+| Doc | Path |
+|-----|------|
+| Plan | [`docs/phase_8_plan.md`](phase_8_plan.md) |
+| Predictions (null pre-registered) | [`docs/phase_8_predictions.md`](phase_8_predictions.md) |
+| Matrix | [`bench/config_matrix_phase8_v1.yaml`](../bench/config_matrix_phase8_v1.yaml) |
 
-**On instance:** Parts B–E of the operator checklist; `RESULTS_DIR` on persistent volume; TRT engine never left on ephemeral disk.
+**Gates before A100:** add_rmsnorm kernel @ bf16/3584 → torch op → vLLM swap on T4 → CUDA graph capture green.
+
+**A100 session (one rental):** preamble (cache pair, output equiv, variance repeat) + baseline vs op A/B. See predictions doc.
+
+**First engine: vLLM.** SGLang follow-up after gate.
+
+## Phase 7
+
+**Closed** (report gitignored). Harness fixes on main: `bench/cache_obs.py`, flush-between-cells default for pre-registered matrices.
 
 ## Phase 6
 

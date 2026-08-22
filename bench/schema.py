@@ -74,6 +74,8 @@ class CellResult:
     latencies_ms: list[float] = field(default_factory=list)
     ttft_ms: list[float] = field(default_factory=list)
     tpot_ms: list[float] = field(default_factory=list)
+    prompt_tokens: int | None = None
+    prefix_cache_hit_pct: float | None = None
     # Per-request generation rates (output_tokens / e2e_s), not system rate.
     per_request_tok_s: list[float] = field(default_factory=list)
     output_tokens_total: int = 0

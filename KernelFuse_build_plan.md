@@ -108,16 +108,22 @@ An inference-serving benchmark (vLLM / SGLang / TensorRT-LLM) plus a hand-writte
 
 ---
 
-## Phase 8 — Analysis, write-up, and the contribution on-ramp
-*Hardware: none. Goal: turn runs into the artifact, and surface the open-source PR.*
+## Phase 8 — vLLM integration (custom add+RMSNorm op)
+*Hardware: Tier A/B to develop; Tier C once for A/B. Goal: kernel inside the serving stack, with a pre-registered end-to-end null.*
 
-- Write the results analysis: where each backend wins and why (batching strategy, KV-cache handling, the prefill-vs-decode split), stated in mechanism terms, not just a number table.
-- Fold the kernel story in: the benchmark located the hot path, the kernel drilled into it. Present naive vs fused vs built-in with the memory-bound reasoning.
-- Be explicit about scope: single-node, model sizes named, honest about where your kernel loses to library code and why.
-- Capture anything you found broken or undocumented in a backend during Phases 6–7 (a wrong throughput calc, a missing config path, a metrics bug). That is the seed of an upstream PR — file the issue / open the fix in *their* repo. The benchmark is the on-ramp; the merged change is the separate contribution.
-- Finalize the README as a proper project front page: the two-layer story, the methodology, the headline findings, reproduction steps.
+- Write **add+RMSNorm** (not norm-only): vLLM fuses residual add + norm; splitting them measures a false regression.
+- Port to **bf16 in/out, fp32 accumulate, vec8 loads**; re-probe smem/occupancy at hidden **3584** (Qwen2.5-7B).
+- Package as torch custom op; register in **vLLM 0.8.5** first (**SGLang follow-up**, not co-primary).
+- Dev on 1650 + Colab T4 until correctness and **CUDA graph capture** pass (no alloc/sync in forward).
+- Pre-register null: e2e TPOT will not move (bandwidth-bound decode); deliverable is integration + isolated kernel speedup.
+- One A100 session: Phase 7 preamble cells + baseline vs treatment A/B (see `docs/phase_8_predictions.md`).
 
-**Exit gate:** repo reads as one coherent inference-performance body of work; resume bullet writes itself; at least one concrete upstream-PR candidate identified.
+**Exit gate:** op serving Qwen2.5-7B on A100 with graphs on; null confirmed; report explains why e2e didn't move.
+
+---
+
+## Phase 8b — SGLang integration (follow-up)
+*After vLLM gate. Same kernel; higher integration friction.*
 
 ---
 

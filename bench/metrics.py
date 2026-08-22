@@ -22,3 +22,12 @@ def percentile(sorted_samples: Sequence[float], p: float) -> float:
 def summarize_latencies(samples_ms: Sequence[float], ps: Sequence[float] = (50, 90, 99)) -> dict[str, float]:
     s = sorted(float(x) for x in samples_ms)
     return {f"p{int(p)}": percentile(s, float(p)) for p in ps}
+
+
+def latency_range(samples_ms: Sequence[float]) -> dict[str, float]:
+    """Min / max / span on raw per-request samples (not percentiles)."""
+    if not samples_ms:
+        return {"min": float("nan"), "max": float("nan"), "span": float("nan")}
+    xs = [float(x) for x in samples_ms]
+    lo, hi = min(xs), max(xs)
+    return {"min": lo, "max": hi, "span": hi - lo}

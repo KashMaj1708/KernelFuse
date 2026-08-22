@@ -1,0 +1,65 @@
+# Pre-registered config matrix — Phase 8 v1
+# IMMUTABLE after first measurement.
+# Headline: vLLM custom add+RMSNorm A/B + measurement preamble (not full Phase 7 grid).
+matrix_version: phase8-v1
+description: >
+  Tier-C integration measurement. vLLM baseline vs custom op. Preamble cells for
+  Phase 7 leftovers (cache pair, variance repeat). Pre-registered null: e2e TPOT
+  unchanged; kernel isolation must show speedup.
+
+hardware_tier: C
+device_hint: "Vast.ai 1x A100 SXM4 80GB; same pins as Phase 7 vLLM"
+
+backends:
+  - vllm
+
+model_repo: Qwen/Qwen2.5-7B-Instruct
+model_revision: a09a35458c702b33eeacc393d103063234e8bc28
+
+models:
+  vllm: Qwen/Qwen2.5-7B-Instruct
+
+launch:
+  dtype: bfloat16
+  enforce_eager: false
+  gpu_memory_utilization: 0.90
+  max_model_len: 4096
+  # baseline | custom_op — harness/runner records via env KERNELFUSE_VLLM_RMSNORM=custom
+  integration_mode: baseline
+
+# Minimal A/B + preamble. Full grid is Phase 7; do not rerun unless regressing.
+sweep:
+  batch_size: [1]
+  input_tokens: [128]
+  output_tokens: [128, 512]
+  concurrency: [1, 64, 128]
+
+# Deliberate cache experiment (run with --no-flush-cache-between-cells on pass 2 only).
+cache_experiment:
+  batch_size: [1]
+  input_tokens: [2048]
+  output_tokens: [128]
+  concurrency: [1]
+
+instance_smoke:
+  batch_size: [1]
+  input_tokens: [128]
+  output_tokens: [128]
+  concurrency: [1]
+
+run:
+  warmup_requests: 8
+  num_requests: 64
+  seed: 0
+  report_percentiles: [50, 90, 99]
+  flush_cache_between_cells: true
+
+pins:
+  torch: "2.6.0"
+  torch_cuda_index: cu124
+  vllm: "0.8.5"
+
+notes:
+  - Rent A100 only after Colab/T4 integration + graph capture green.
+  - Pass 1: baseline vLLM. Pass 2: custom op. Same cells, same pins.
+  - Cache pair: run cache_experiment twice (flush on / flush off); see phase_8_predictions.md.

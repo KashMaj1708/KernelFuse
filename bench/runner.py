@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,8 +28,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bench.backends import make_backend
-from bench.metrics import summarize_latencies
-from bench.prompts import make_prompt
+from bench.cache_obs import flush_prefix_cache, scrape_prefix_cache_hit_pct
+from bench.metrics import latency_range, summarize_latencies
+from bench.prompts import make_prompt, prompt_token_len
 from bench.schema import CellResult, CellSpec, GenerateRequest
 
 
@@ -125,6 +127,15 @@ def run_cell(
     max_model_len: int | None = None,
 ) -> CellResult:
     result = CellResult(cell=cell)
+    probe = _prompt(
+        cell.input_tokens,
+        cell.seed,
+        0,
+        model_id=cell.model,
+        max_model_len=max_model_len,
+        output_tokens=cell.output_tokens,
+    )
+    result.prompt_tokens = prompt_token_len(probe, cell.model)
 
     def one(i: int, warmup: bool) -> None:
         req = GenerateRequest(
@@ -207,9 +218,9 @@ def print_table(results: list[CellResult], percentiles: list[int]) -> None:
         )
     elif results and any(r.cell.backend == "vllm" for r in results):
         print(
-            "note: T4/sm_75 uses XFormers (not FlashAttention). "
-            "Record dtype=float16 + attention_backend in run_metadata.json. "
-            "Phase 6 vs Phase 7 are not cross-tier comparable.",
+            "note: record attention_backend from the engine log "
+            "(FLASH_ATTN on A100/sm_80+; Phase 6 T4 used TRITON_ATTN). "
+            "Do not cross-compare absolute tok/s across tiers.",
             flush=True,
         )
     hdr = (
@@ -245,6 +256,7 @@ def _row_from_result(r: CellResult, percentiles: list[int]) -> dict:
     e2e = summarize_latencies(r.latencies_ms, percentiles) if r.latencies_ms else {}
     ttft = summarize_latencies(r.ttft_ms, percentiles) if r.ttft_ms else {}
     tpot = summarize_latencies(r.tpot_ms, percentiles) if r.tpot_ms else {}
+    ttft_rng = latency_range(r.ttft_ms)
     row = {
         "matrix_version": r.cell.matrix_version,
         "backend": r.cell.backend,
@@ -254,6 +266,13 @@ def _row_from_result(r: CellResult, percentiles: list[int]) -> dict:
         "output_tokens": r.cell.output_tokens,
         "concurrency": r.cell.concurrency,
         "concurrency_note": _concurrency_note(r.cell.matrix_version, r.cell.backend),
+        "prompt_tokens": "" if r.prompt_tokens is None else str(r.prompt_tokens),
+        "prefix_cache_hit_pct": (
+            "" if r.prefix_cache_hit_pct is None else f"{r.prefix_cache_hit_pct:.4f}"
+        ),
+        "ttft_min_ms": f"{ttft_rng['min']:.4f}",
+        "ttft_max_ms": f"{ttft_rng['max']:.4f}",
+        "ttft_span_ms": f"{ttft_rng['span']:.4f}",
         "system_throughput_tok_s": f"{r.system_throughput_tok_s:.4f}",
         "mean_per_request_tok_s": f"{r.mean_per_request_tok_s:.4f}",
         "errors": r.errors,
@@ -277,6 +296,11 @@ def csv_fields(percentiles: list[int]) -> list[str]:
         "output_tokens",
         "concurrency",
         "concurrency_note",
+        "prompt_tokens",
+        "prefix_cache_hit_pct",
+        "ttft_min_ms",
+        "ttft_max_ms",
+        "ttft_span_ms",
         *[f"p{p}_ms" for p in percentiles],
         *[f"ttft_p{p}_ms" for p in percentiles],
         *[f"tpot_p{p}_ms" for p in percentiles],
@@ -346,6 +370,24 @@ def main() -> int:
         default=None,
         help="Recorded attention backend (e.g. xformers). Defaults from matrix/env.",
     )
+    parser.add_argument(
+        "--server-log",
+        type=Path,
+        default=None,
+        help="Server stdout log for per-cell prefix-cache hit rate scrape "
+        "(default: env KERNELFUSE_SERVER_LOG).",
+    )
+    parser.add_argument(
+        "--metrics-url",
+        type=str,
+        default=None,
+        help="Prometheus /metrics URL for prefix-cache counters (optional).",
+    )
+    parser.add_argument(
+        "--no-flush-cache-between-cells",
+        action="store_true",
+        help="Disable prefix/radix cache flush before each cell (use for deliberate cache-on runs).",
+    )
     args = parser.parse_args()
 
     cfg = load_matrix(args.matrix)
@@ -353,6 +395,12 @@ def main() -> int:
     max_model_len = launch.get("max_model_len")
     if max_model_len is not None:
         max_model_len = int(max_model_len)
+    run_cfg = cfg.get("run") or {}
+    flush_default = run_cfg.get("flush_cache_between_cells")
+    if flush_default is None:
+        mv = str(cfg.get("matrix_version", ""))
+        flush_default = mv.startswith("phase7") or mv.startswith("phase8")
+    flush_cache_between_cells = bool(flush_default) and not args.no_flush_cache_between_cells
     percentiles = [int(p) for p in cfg["run"]["report_percentiles"]]
     cells = expand_cells(
         cfg, args.backends, smoke=args.smoke, prefill_heavy=args.prefill_heavy
@@ -362,7 +410,7 @@ def main() -> int:
 
     print(
         f"matrix={cfg['matrix_version']}  cells={len(cells)}  smoke={args.smoke}  "
-        f"prefill_heavy={args.prefill_heavy}  "
+        f"prefill_heavy={args.prefill_heavy}  flush_cache={flush_cache_between_cells}  "
         f"backends={sorted({c.backend for c in cells})}  max_model_len={max_model_len}",
         flush=True,
     )
@@ -376,28 +424,103 @@ def main() -> int:
     if args.out.is_file():
         args.out.unlink()
 
+    status_path = Path(
+        os.environ.get("KERNELFUSE_STATUS_PATH", str(args.out.parent / "STATUS.txt"))
+    )
+    server_log = args.server_log
+    if server_log is None:
+        env_log = os.environ.get("KERNELFUSE_SERVER_LOG")
+        if env_log:
+            server_log = Path(env_log)
+
+    def backend_base_url(bname: str) -> str | None:
+        if bname == "vllm":
+            return os.environ.get("KERNELFUSE_VLLM_BASE_URL", "http://127.0.0.1:8000/v1")
+        if bname == "sglang":
+            return os.environ.get("KERNELFUSE_SGLANG_BASE_URL", "http://127.0.0.1:30000/v1")
+        if bname == "trtllm":
+            return os.environ.get("KERNELFUSE_TRTLLM_BASE_URL", "http://127.0.0.1:8001/v1")
+        return None
+
+    def write_status(msg: str) -> None:
+        line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}"
+        print(line, flush=True)
+        try:
+            with status_path.open("a", encoding="utf-8") as sf:
+                sf.write(line + "\n")
+        except Exception:
+            pass
+
+    try:
+        from tqdm import tqdm
+    except ImportError:  # pragma: no cover
+        def tqdm(x, **kwargs):  # type: ignore
+            return x
+
+    write_status(
+        f"START matrix={cfg['matrix_version']} cells={len(cells)} "
+        f"backends={sorted({c.backend for c in cells})} out={args.out}"
+    )
+
     for bname, bcells in by_backend.items():
         model = bcells[0].model
         backend = make_backend(bname, model)
         print(f"\n=== backend={bname} model={model} ===", flush=True)
+        write_status(f"BACKEND_START {bname} model={model}")
         backend.start()
         try:
-            for cell in bcells:
-                print(
-                    f"  cell bs={cell.batch_size} in={cell.input_tokens} "
-                    f"out={cell.output_tokens} c={cell.concurrency} ...",
-                    flush=True,
+            for cell in tqdm(
+                bcells,
+                desc=f"{bname}",
+                unit="cell",
+                dynamic_ncols=True,
+            ):
+                label = (
+                    f"bs={cell.batch_size} in={cell.input_tokens} "
+                    f"out={cell.output_tokens} c={cell.concurrency}"
                 )
+                write_status(f"CELL_START {bname} {label}")
+                print(f"  cell {label} ...", flush=True)
+                base_url = backend_base_url(bname)
+                if flush_cache_between_cells and base_url:
+                    flushed = flush_prefix_cache(base_url, bname)
+                    write_status(f"CACHE_FLUSH {bname} ok={flushed}")
                 cell_result = run_cell(cell, backend, max_model_len=max_model_len)
+                metrics_url = args.metrics_url
+                if metrics_url is None and base_url:
+                    root = base_url.rstrip("/")
+                    if root.endswith("/v1"):
+                        root = root[:-3]
+                    metrics_url = f"{root}/metrics"
+                cell_result.prefix_cache_hit_pct = scrape_prefix_cache_hit_pct(
+                    bname,
+                    server_log=server_log,
+                    metrics_url=metrics_url if bname == "vllm" else None,
+                )
                 results.append(cell_result)
                 append_csv_row(args.out, cell_result, percentiles)
+                e2e = (
+                    summarize_latencies(cell_result.latencies_ms, percentiles)
+                    if cell_result.latencies_ms
+                    else {}
+                )
+                write_status(
+                    f"CELL_DONE {bname} {label} "
+                    f"p50={e2e.get('p50', float('nan')):.1f} "
+                    f"sys={cell_result.system_throughput_tok_s:.1f} "
+                    f"err={cell_result.errors} wall={cell_result.wall_s:.1f}s "
+                    f"prompt_tok={cell_result.prompt_tokens} "
+                    f"cache_hit={cell_result.prefix_cache_hit_pct}"
+                )
                 print(f"    appended -> {args.out}", flush=True)
         finally:
             backend.stop()
+            write_status(f"BACKEND_STOP {bname}")
 
     print(flush=True)
     print_table(results, percentiles)
     print(f"\nwrote {args.out} ({len(results)} cells)", flush=True)
+    write_status(f"DONE cells={len(results)} out={args.out}")
 
     # Provenance sidecar (required for Phase 6+ real backends).
     meta_path = args.metadata_out or (args.out.parent / "run_metadata.json")
